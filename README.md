@@ -133,9 +133,15 @@ STRICT_MIN_POSITIVE_SIGNALS=2
 STRICT_MAX_NEGATIVE_SIGNALS=0
 MAX_NOTIFICATIONS_PER_CYCLE=5
 HEADLESS=true
+WAIT_FOR_NETWORK_IDLE=false
+PRODUCT_READY_TIMEOUT_SECONDS=5
+BLOCK_RESOURCE_TYPES=font,media
 DATABASE_PATH=./data/vine-watcher.sqlite
 PLAYWRIGHT_USER_DATA_DIR=./data/chromium-profile
 NOTIFY_CRITICAL_ERRORS=true
+SESSION_ATTENTION_MAX_FAILURES=2
+SESSION_ATTENTION_COOLDOWN_SECONDS=300
+STOP_ON_SESSION_ATTENTION=true
 ```
 
 Default sections:
@@ -274,6 +280,8 @@ Logs:
 journalctl -u vine-watcher.service -f
 ```
 
+The service uses `Restart=on-failure`. When Amazon requires login, CAPTCHA, or manual verification, the watcher can stop cleanly after repeated session-health failures instead of restarting forever.
+
 Status:
 
 ```bash
@@ -319,6 +327,43 @@ Run the same suite locally:
 ```bash
 npm run validate
 ```
+
+## Session Health
+
+When Amazon asks for login, 2FA, CAPTCHA, or another manual check, the watcher treats it as a session-health failure.
+
+Default behavior:
+
+- notify Telegram immediately, then at most once every `SESSION_ATTENTION_COOLDOWN_SECONDS`
+- stop after `SESSION_ATTENTION_MAX_FAILURES` consecutive failures
+- exit cleanly so systemd does not restart it in a loop
+
+After you complete manual login, start the service again:
+
+```bash
+sudo /opt/vine-watcher-telegram/scripts/server-login.sh start
+# complete Amazon login in noVNC
+sudo /opt/vine-watcher-telegram/scripts/server-login.sh finish
+sudo systemctl start vine-watcher.service
+```
+
+To keep retrying instead of stopping, set:
+
+```bash
+STOP_ON_SESSION_ATTENTION=false
+```
+
+## Scanner Performance
+
+The scanner is optimized to read Vine cards as soon as the DOM is usable:
+
+- `WAIT_FOR_NETWORK_IDLE=false` avoids waiting for Amazon tracking/lazy-load requests.
+- `PRODUCT_READY_TIMEOUT_SECONDS=5` waits briefly for Vine cards or login/CAPTCHA signals.
+- `PAGE_SETTLE_SECONDS=1` keeps a short post-load buffer.
+- `SECTION_DELAY_SECONDS=1` keeps section-to-section scans quick.
+- `BLOCK_RESOURCE_TYPES=font,media` blocks heavy nonessential browser resources.
+
+If Amazon changes the page and extraction becomes flaky, temporarily increase `PAGE_SETTLE_SECONDS` or set `WAIT_FOR_NETWORK_IDLE=true` while debugging.
 
 ## Scoring
 

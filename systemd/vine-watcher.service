@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/vine-watcher-telegram
 ExecStart=/usr/bin/npm run start
-Restart=always
+Restart=on-failure
 RestartSec=20
 User=vinewatcher
 Environment=NODE_ENV=production

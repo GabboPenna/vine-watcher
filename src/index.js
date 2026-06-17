@@ -4,7 +4,7 @@ const { createBrowserContext } = require("./browser");
 const { loadConfig } = require("./config");
 const { createLogger } = require("./logger");
 const { scoreProduct } = require("./scorer");
-const { SessionNeedsAttentionError, VineScanner } = require("./scanner");
+const { isBrowserClosedError, SessionNeedsAttentionError, VineScanner } = require("./scanner");
 const { ProductStorage } = require("./storage");
 const { delayWithJitter, sleep } = require("./utils");
 const { TelegramClient } = require("./telegram");
@@ -137,6 +137,8 @@ async function main() {
   let context = null;
   let shuttingDown = false;
   let lastCriticalNotificationAt = 0;
+  let lastSessionAttentionNotificationAt = 0;
+  let consecutiveSessionAttentionFailures = 0;
 
   async function shutdown(signal, exitCode = 0) {
     if (shuttingDown) {
@@ -184,20 +186,41 @@ async function main() {
   do {
     try {
       await runCycle({ scanner, storage, telegram, config, logger });
+      consecutiveSessionAttentionFailures = 0;
     } catch (error) {
       if (error instanceof SessionNeedsAttentionError) {
-        logger.error(error.message);
-        if (config.notifyCriticalErrors && Date.now() - lastCriticalNotificationAt > config.criticalNotificationCooldownMs) {
-          lastCriticalNotificationAt = Date.now();
-          await telegram.sendCriticalError(error).catch((telegramError) => {
-            logger.warn(`Critical Telegram notification failed: ${telegramError.message}`);
-          });
+        consecutiveSessionAttentionFailures += 1;
+        const willStop =
+          config.stopOnSessionAttention &&
+          consecutiveSessionAttentionFailures >= config.sessionAttentionMaxFailures;
+
+        logger.error(
+          `${error.message} consecutive_session_attention=${consecutiveSessionAttentionFailures}/${config.sessionAttentionMaxFailures}`
+        );
+
+        if (
+          config.notifyCriticalErrors &&
+          (willStop || Date.now() - lastSessionAttentionNotificationAt > config.sessionAttentionCooldownMs)
+        ) {
+          lastSessionAttentionNotificationAt = Date.now();
+          await telegram
+            .sendSessionAttention(error, {
+              failureCount: consecutiveSessionAttentionFailures,
+              maxFailures: config.sessionAttentionMaxFailures,
+              willStop
+            })
+            .catch((telegramError) => {
+              logger.warn(`Session attention Telegram notification failed: ${telegramError.message}`);
+            });
         }
 
-        if (config.exitOnSessionAttention) {
-          await shutdown("session attention", 2);
+        if (willStop) {
+          logger.error("Stopping watcher because Amazon session needs manual attention");
+          await shutdown("session attention", once ? 2 : 0);
           return;
         }
+      } else if (shuttingDown && isBrowserClosedError(error)) {
+        logger.info("Scan interrupted by shutdown");
       } else {
         logger.error(error);
         if (config.notifyCriticalErrors && Date.now() - lastCriticalNotificationAt > config.criticalNotificationCooldownMs) {

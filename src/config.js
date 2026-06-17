@@ -186,6 +186,17 @@ function parseTimestampMs(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function parseList(value, fallback = []) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return fallback;
+  }
+  return text
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function resolveProjectPath(value) {
   if (path.isAbsolute(value)) {
     return value;
@@ -274,15 +285,24 @@ function loadConfig(overrides = {}) {
     maxNotificationsPerCycle: parseNumber(readEnv("MAX_NOTIFICATIONS_PER_CYCLE", "5"), 5, 1),
     headless: parseBool(readEnv("HEADLESS", "false"), false),
     pageTimeoutMs: parseNumber(readEnv("PAGE_TIMEOUT_SECONDS", "45"), 45, 5) * 1000,
-    pageSettleMs: parseNumber(readEnv("PAGE_SETTLE_SECONDS", "3"), 3, 0) * 1000,
-    sectionDelayMs: parseNumber(readEnv("SECTION_DELAY_SECONDS", "3"), 3, 0) * 1000,
+    waitForNetworkIdle: parseBool(readEnv("WAIT_FOR_NETWORK_IDLE", "false"), false),
+    productReadyTimeoutMs: parseNumber(readEnv("PRODUCT_READY_TIMEOUT_SECONDS", "5"), 5, 1) * 1000,
+    pageSettleMs: parseNumber(readEnv("PAGE_SETTLE_SECONDS", "1"), 1, 0) * 1000,
+    sectionDelayMs: parseNumber(readEnv("SECTION_DELAY_SECONDS", "1"), 1, 0) * 1000,
+    blockedResourceTypes: parseList(readEnv("BLOCK_RESOURCE_TYPES", "font,media"), ["font", "media"]),
     databasePath: resolveProjectPath(readEnv("DATABASE_PATH", "./data/vine-watcher.sqlite")),
     playwrightUserDataDir: resolveProjectPath(readEnv("PLAYWRIGHT_USER_DATA_DIR", "./data/chromium-profile")),
     logLevel: readEnv("LOG_LEVEL", "info"),
     notifyCriticalErrors: parseBool(readEnv("NOTIFY_CRITICAL_ERRORS", "true"), true),
     criticalNotificationCooldownMs:
       parseNumber(readEnv("CRITICAL_NOTIFICATION_COOLDOWN_SECONDS", "900"), 900, 60) * 1000,
-    exitOnSessionAttention: parseBool(readEnv("EXIT_ON_SESSION_ATTENTION", "false"), false),
+    sessionAttentionMaxFailures: parseNumber(readEnv("SESSION_ATTENTION_MAX_FAILURES", "2"), 2, 1),
+    sessionAttentionCooldownMs:
+      parseNumber(readEnv("SESSION_ATTENTION_COOLDOWN_SECONDS", "300"), 300, 60) * 1000,
+    stopOnSessionAttention: parseBool(
+      readEnv("STOP_ON_SESSION_ATTENTION", readEnv("EXIT_ON_SESSION_ATTENTION", "true")),
+      true
+    ),
     keywords: keywordConfig,
     timezoneId: readEnv("TZ", "Europe/Rome"),
     ...overrides

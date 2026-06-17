@@ -20,6 +20,10 @@ class SessionNeedsAttentionError extends Error {
   }
 }
 
+function isBrowserClosedError(error) {
+  return /Target page, context or browser has been closed/i.test(error && error.message ? error.message : String(error));
+}
+
 class VineScanner {
   constructor({ context, config, logger }) {
     this.context = context;
@@ -52,13 +56,17 @@ class VineScanner {
         this.logger.warn(`Amazon returned HTTP ${response.status()} for ${section.name}`);
       }
 
-      await page
-        .waitForLoadState("networkidle", {
-          timeout: Math.min(this.config.pageTimeoutMs, 15000)
-        })
-        .catch(() => {
-          this.logger.debug(`Network did not become idle for "${section.name}"; continuing with DOM read`);
-        });
+      await this.waitForReadableDom(page, section);
+
+      if (this.config.waitForNetworkIdle) {
+        await page
+          .waitForLoadState("networkidle", {
+            timeout: Math.min(this.config.pageTimeoutMs, 15000)
+          })
+          .catch(() => {
+            this.logger.debug(`Network did not become idle for "${section.name}"; continuing with DOM read`);
+          });
+      }
 
       if (this.config.pageSettleMs > 0) {
         await page.waitForTimeout(this.config.pageSettleMs);
@@ -82,11 +90,53 @@ class VineScanner {
       if (error instanceof SessionNeedsAttentionError) {
         throw error;
       }
-      this.logger.error(`Scanner error on "${section.name}": ${error.message}`);
+      if (!isBrowserClosedError(error)) {
+        this.logger.error(`Scanner error on "${section.name}": ${error.message}`);
+      }
       throw error;
     } finally {
       await page.close().catch(() => {});
     }
+  }
+
+  async waitForReadableDom(page, section) {
+    await page
+      .waitForFunction(
+        () => {
+          if (!document.body) {
+            return false;
+          }
+
+          const hasVineCard = Boolean(
+            document.querySelector(
+              '[id^="vvp-item-tile"], .vvp-item-tile, .vvp-item-tile-content, .vvp-item-product-title'
+            )
+          );
+          if (hasVineCard) {
+            return true;
+          }
+
+          const text = (document.body.innerText || "").toLowerCase();
+          const title = (document.title || "").toLowerCase();
+          return (
+            text.includes("vine") ||
+            text.includes("captcha") ||
+            text.includes("robot check") ||
+            text.includes("accedi al tuo account") ||
+            text.includes("identificati") ||
+            title.includes("sign in") ||
+            title.includes("accedi") ||
+            Boolean(document.querySelector('input[type="password"], input#ap_password, input#captchacharacters'))
+          );
+        },
+        null,
+        {
+          timeout: this.config.productReadyTimeoutMs
+        }
+      )
+      .catch(() => {
+        this.logger.debug(`Readable DOM wait timed out for "${section.name}"; continuing with current DOM`);
+      });
   }
 
   normalizeProduct(rawProduct, section) {
@@ -398,6 +448,7 @@ function extractProductsFromPage(args) {
 }
 
 module.exports = {
+  isBrowserClosedError,
   SessionNeedsAttentionError,
   VineScanner
 };

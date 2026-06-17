@@ -143,6 +143,30 @@ class TelegramClient {
     ].join("\n");
     return this.sendText(message);
   }
+
+  formatSessionAttentionMessage(error, details = {}) {
+    const failureCount = details.failureCount || 1;
+    const maxFailures = details.maxFailures || 1;
+    const willStop = Boolean(details.willStop);
+    return [
+      "Vine Watcher Telegram: Amazon login required",
+      "",
+      error && error.message ? error.message : String(error),
+      "",
+      `Session health: ${failureCount}/${maxFailures} consecutive failures`,
+      willStop ? "Watcher is stopping to avoid repeated Amazon retries." : "Watcher will retry after the next scan delay.",
+      "",
+      "Manual recovery:",
+      "sudo /opt/vine-watcher-telegram/scripts/server-login.sh start",
+      "# complete Amazon login in noVNC",
+      "sudo /opt/vine-watcher-telegram/scripts/server-login.sh finish",
+      "sudo systemctl start vine-watcher.service"
+    ].join("\n");
+  }
+
+  async sendSessionAttention(error, details = {}) {
+    return this.sendText(this.formatSessionAttentionMessage(error, details));
+  }
 }
 
 module.exports = {

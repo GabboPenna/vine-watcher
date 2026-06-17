@@ -23,8 +23,27 @@ async function createBrowserContext(config, logger, options = {}) {
 
   context.setDefaultTimeout(config.pageTimeoutMs);
   context.setDefaultNavigationTimeout(config.pageTimeoutMs);
+  await configureRequestBlocking(context, config, logger);
 
   return context;
+}
+
+async function configureRequestBlocking(context, config, logger) {
+  const blockedTypes = new Set(config.blockedResourceTypes || []);
+  if (blockedTypes.size === 0) {
+    return;
+  }
+
+  await context.route("**/*", async (route) => {
+    const request = route.request();
+    if (blockedTypes.has(request.resourceType())) {
+      await route.abort().catch(() => {});
+      return;
+    }
+    await route.continue().catch(() => {});
+  });
+
+  logger.info(`Blocking browser resource types: ${Array.from(blockedTypes).join(", ")}`);
 }
 
 module.exports = {

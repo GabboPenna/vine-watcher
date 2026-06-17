@@ -140,6 +140,20 @@ function testTelegramFormatting() {
   assert.match(message, /Estimated value: \u20ac42\.50/);
   assert.match(message, /Open Vine section:\nhttps:\/\/www\.amazon\.it\/vine\/vine-items\?queue=potluck/);
   assert.doesNotMatch(message, /Open Vine section:\nhttps:\/\/www\.amazon\.it\/dp\/B002KTID3A/);
+
+  const sessionMessage = telegram.formatSessionAttentionMessage(
+    new Error('Amazon session is not valid or login is required for "Recommended for you".'),
+    {
+      failureCount: 2,
+      maxFailures: 2,
+      willStop: true
+    }
+  );
+
+  assert.match(sessionMessage, /Amazon login required/);
+  assert.match(sessionMessage, /Session health: 2\/2 consecutive failures/);
+  assert.match(sessionMessage, /Watcher is stopping/);
+  assert.match(sessionMessage, /server-login\.sh start/);
 }
 
 function main() {
