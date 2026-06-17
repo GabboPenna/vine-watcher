@@ -170,15 +170,29 @@ function extractProductsFromPage(args) {
     ".vvp-item-tile",
     ".vvp-item-tile-content",
     ".vvp-item-product-title",
-    ".vvp-item-product-image",
-    '[data-itemid]:not([data-itemid=""])'
+    ".vvp-item-product-image"
   ];
 
   const cardSelector = [
     '[id^="vvp-item-tile"]',
     ".vvp-item-tile",
-    ".vvp-item-tile-content",
-    '[data-itemid]:not([data-itemid=""])'
+    ".vvp-item-tile-content"
+  ].join(",");
+
+  const ignoredContainerSelector = [
+    "#navbar",
+    "#nav-flyout-ewc",
+    "#navFooter",
+    "#rhf",
+    ".ewc-item",
+    ".ewc-item-content",
+    ".ewc-item-actions",
+    ".nav-flyout",
+    ".sc-action-quantity",
+    '[id^="sc-item"]',
+    '[data-component-type="s-shopping-cart"]',
+    "header",
+    "footer"
   ].join(",");
 
   const titleSelectors = [
@@ -243,12 +257,28 @@ function extractProductsFromPage(args) {
 
       for (const node of nodes) {
         const card = node.closest(cardSelector);
-        if (card) {
+        if (card && isVineCard(card)) {
           cards.add(card);
         }
       }
     }
     return Array.from(cards);
+  }
+
+  function isVineCard(card) {
+    if (!card || card.closest(ignoredContainerSelector) || !hasVisibleBox(card)) {
+      return false;
+    }
+
+    return (
+      card.matches('[id^="vvp-item-tile"], .vvp-item-tile, .vvp-item-tile-content') ||
+      Boolean(card.querySelector(".vvp-item-product-title, .vvp-item-product-image"))
+    );
+  }
+
+  function hasVisibleBox(node) {
+    const rect = node.getBoundingClientRect();
+    return rect.width > 20 && rect.height > 20;
   }
 
   function pickTitle(card) {
