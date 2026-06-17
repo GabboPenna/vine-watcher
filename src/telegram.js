@@ -3,6 +3,10 @@
 const { truncate } = require("./utils");
 
 function formatEuro(value) {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     return "";

@@ -21,6 +21,10 @@ function nextScanDelayMs(config) {
 }
 
 function formatEuro(value) {
+  if (value === null || value === undefined || value === "") {
+    return "n/a";
+  }
+
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     return "n/a";
@@ -30,7 +34,12 @@ function formatEuro(value) {
 
 function notificationTriggers(product, scoring, config) {
   const triggers = [];
-  const estimatedValue = Number(product.estimated_value_eur);
+  const estimatedValue =
+    product.estimated_value_eur === null ||
+    product.estimated_value_eur === undefined ||
+    product.estimated_value_eur === ""
+      ? Number.NaN
+      : Number(product.estimated_value_eur);
   const valueTrigger =
     config.minValueToNotifyEur > 0 &&
     Number.isFinite(estimatedValue) &&
