@@ -17,11 +17,69 @@ class SessionNeedsAttentionError extends Error {
     super(message);
     this.name = "SessionNeedsAttentionError";
     this.details = details;
+    this.kind = details.kind || "unknown";
+    this.confirmable = details.confirmable !== false;
   }
 }
 
 function isBrowserClosedError(error) {
   return /Target page, context or browser has been closed/i.test(error && error.message ? error.message : String(error));
+}
+
+function classifySessionStatus(status, sectionName = "Vine") {
+  const url = String(status.url || "").toLowerCase();
+  const title = String(status.title || "").toLowerCase();
+  const hasVineSignal = Boolean(status.hasVineCard || status.hasVineText);
+  const loginUrl = /\/ap\/(signin|mfa|cvf|challenge|cq)/i.test(url);
+  const signInPageTitle =
+    /\bsign\s*in\b/i.test(title) ||
+    /\blogin\b/i.test(title) ||
+    /\baccedi\b/i.test(title) ||
+    /\bidentificati\b/i.test(title);
+  const blockingLoginUi = Boolean(status.passwordInput || status.emailInput || status.signInForm || loginUrl);
+
+  if (status.captchaInput || status.captchaText) {
+    return {
+      needsAttention: true,
+      kind: "captcha",
+      confirmable: false,
+      message: `Amazon requires a CAPTCHA or manual verification for "${sectionName}". Run npm run login and complete it manually.`
+    };
+  }
+
+  if (blockingLoginUi) {
+    return {
+      needsAttention: true,
+      kind: "login",
+      confirmable: true,
+      message: `Amazon session is not valid or login is required for "${sectionName}". Run npm run login.`
+    };
+  }
+
+  if (!hasVineSignal && (status.signInText || signInPageTitle)) {
+    return {
+      needsAttention: true,
+      kind: "suspected-login",
+      confirmable: true,
+      message:
+        `Amazon may be asking for login for "${sectionName}", but no blocking login form was detected. ` +
+        "A session health check will confirm it before stopping."
+    };
+  }
+
+  if (status.signInText || signInPageTitle) {
+    return {
+      needsAttention: false,
+      kind: "soft-sign-in-text",
+      warning:
+        `The "${sectionName}" page contains generic sign-in text, but still looks like Vine; continuing.`
+    };
+  }
+
+  return {
+    needsAttention: false,
+    kind: "ok"
+  };
 }
 
 class VineScanner {
@@ -166,59 +224,110 @@ class VineScanner {
   }
 
   async assertSessionReady(page, section) {
-    const status = await page.evaluate(() => {
-      const text = (document.body && document.body.innerText ? document.body.innerText : "").slice(0, 6000);
-      const lower = text.toLowerCase();
-      const title = document.title || "";
-      const titleLower = title.toLowerCase();
-      const url = window.location.href;
-      const passwordInput = Boolean(document.querySelector('input[type="password"], input#ap_password'));
-      const captchaInput = Boolean(
-        document.querySelector(
-          'input[name*="captcha" i], input#captchacharacters, form[action*="validateCaptcha" i], img[src*="captcha" i]'
-        )
-      );
-      const captchaText =
-        lower.includes("captcha") ||
-        lower.includes("robot check") ||
-        lower.includes("inserisci i caratteri") ||
-        lower.includes("verifica che non sei un robot");
-      const signInText =
-        titleLower.includes("sign in") ||
-        titleLower.includes("accedi") ||
-        lower.includes("accedi al tuo account") ||
-        lower.includes("identificati") ||
-        url.includes("/ap/signin");
+    const status = await readSessionStatus(page);
+    const classification = classifySessionStatus(status, section.name);
 
-      return {
-        url,
-        title,
-        passwordInput,
-        captchaInput,
-        captchaText,
-        signInText,
-        hasVineText: lower.includes("vine")
-      };
-    });
-
-    if (status.captchaInput || status.captchaText) {
-      throw new SessionNeedsAttentionError(
-        `Amazon requires a CAPTCHA or manual verification for "${section.name}". Run npm run login and complete it manually.`,
-        status
-      );
+    if (classification.needsAttention) {
+      throw new SessionNeedsAttentionError(classification.message, {
+        ...status,
+        kind: classification.kind,
+        confirmable: classification.confirmable
+      });
     }
 
-    if (status.passwordInput || status.signInText) {
-      throw new SessionNeedsAttentionError(
-        `Amazon session is not valid or login is required for "${section.name}". Run npm run login.`,
-        status
-      );
+    if (classification.warning) {
+      this.logger.warn(classification.warning);
     }
 
     if (!status.hasVineText) {
       this.logger.warn(`The "${section.name}" page does not look like a Vine page; trying selectors anyway`);
     }
   }
+
+  async verifySessionHealth() {
+    const page = await this.context.newPage();
+    const section = {
+      name: "session health",
+      url: this.config.amazonVineBaseUrl
+    };
+
+    try {
+      const response = await page.goto(section.url, {
+        waitUntil: "domcontentloaded",
+        timeout: this.config.pageTimeoutMs
+      });
+
+      if (response && response.status() >= 500) {
+        this.logger.warn(`Amazon returned HTTP ${response.status()} during session health check`);
+      }
+
+      await this.waitForReadableDom(page, section);
+
+      if (this.config.pageSettleMs > 0) {
+        await page.waitForTimeout(Math.min(this.config.pageSettleMs, 1000));
+      }
+
+      const status = await readSessionStatus(page);
+      const classification = classifySessionStatus(status, section.name);
+      return {
+        ok: !classification.needsAttention,
+        status,
+        classification
+      };
+    } finally {
+      await page.close().catch(() => {});
+    }
+  }
+}
+
+async function readSessionStatus(page) {
+  return page.evaluate(() => {
+    const text = (document.body && document.body.innerText ? document.body.innerText : "").slice(0, 6000);
+    const lower = text.toLowerCase();
+    const title = document.title || "";
+    const titleLower = title.toLowerCase();
+    const url = window.location.href;
+    const passwordInput = Boolean(document.querySelector('input[type="password"], input#ap_password'));
+    const emailInput = Boolean(document.querySelector('input[type="email"], input#ap_email, input[name="email"]'));
+    const signInForm = Boolean(
+      document.querySelector(
+        'form[name="signIn"], form[action*="/ap/signin" i], form[action*="/ap/cvf" i], form[action*="/ap/mfa" i]'
+      )
+    );
+    const captchaInput = Boolean(
+      document.querySelector(
+        'input[name*="captcha" i], input#captchacharacters, form[action*="validateCaptcha" i], img[src*="captcha" i]'
+      )
+    );
+    const hasVineCard = Boolean(
+      document.querySelector('[id^="vvp-item-tile"], .vvp-item-tile, .vvp-item-tile-content, .vvp-item-product-title')
+    );
+    const captchaText =
+      lower.includes("captcha") ||
+      lower.includes("robot check") ||
+      lower.includes("inserisci i caratteri") ||
+      lower.includes("verifica che non sei un robot");
+    const signInText =
+      titleLower.includes("sign in") ||
+      titleLower.includes("accedi") ||
+      lower.includes("accedi al tuo account") ||
+      lower.includes("identificati") ||
+      lower.includes("sign in to your account");
+
+    return {
+      url,
+      title,
+      passwordInput,
+      emailInput,
+      signInForm,
+      captchaInput,
+      captchaText,
+      signInText,
+      hasVineCard,
+      hasVineText: lower.includes("vine"),
+      hasVineUrl: url.includes("/vine/")
+    };
+  });
 }
 
 function extractProductsFromPage(args) {
@@ -448,6 +557,7 @@ function extractProductsFromPage(args) {
 }
 
 module.exports = {
+  classifySessionStatus,
   isBrowserClosedError,
   SessionNeedsAttentionError,
   VineScanner

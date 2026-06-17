@@ -198,6 +198,7 @@ PLAYWRIGHT_USER_DATA_DIR=./data/chromium-profile
 NOTIFY_CRITICAL_ERRORS=true
 SESSION_ATTENTION_MAX_FAILURES=2
 SESSION_ATTENTION_COOLDOWN_SECONDS=300
+VERIFY_SESSION_ATTENTION=true
 STOP_ON_SESSION_ATTENTION=true
 ```
 
@@ -421,6 +422,7 @@ When Amazon asks for login, 2FA, CAPTCHA, or another manual check, the watcher t
 
 Default behavior:
 
+- confirm suspected login failures with a second Vine health-check page before counting them
 - notify Telegram immediately, then at most once every `SESSION_ATTENTION_COOLDOWN_SECONDS`
 - stop after `SESSION_ATTENTION_MAX_FAILURES` consecutive failures
 - exit cleanly so systemd does not restart it in a loop
@@ -438,6 +440,12 @@ To keep retrying instead of stopping, set:
 
 ```bash
 STOP_ON_SESSION_ATTENTION=false
+```
+
+To disable the extra confirmation check, set:
+
+```bash
+VERIFY_SESSION_ATTENTION=false
 ```
 
 ## Scanner Performance

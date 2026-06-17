@@ -7,6 +7,7 @@ const path = require("node:path");
 
 const { loadConfig } = require("../src/config");
 const { notificationTriggers } = require("../src/index");
+const { classifySessionStatus } = require("../src/scanner");
 const { scoreProduct } = require("../src/scorer");
 const { ProductStorage } = require("../src/storage");
 const { TelegramClient } = require("../src/telegram");
@@ -156,12 +157,57 @@ function testTelegramFormatting() {
   assert.match(sessionMessage, /server-login\.sh start/);
 }
 
+function testSessionStatusClassification() {
+  assert.equal(
+    classifySessionStatus({
+      url: "https://www.amazon.it/vine/vine-items?queue=potluck",
+      title: "Amazon Vine",
+      signInText: true,
+      hasVineText: true,
+      hasVineCard: false,
+      hasVineUrl: true
+    }).needsAttention,
+    false
+  );
+
+  const login = classifySessionStatus({
+    url: "https://www.amazon.it/ap/signin",
+    title: "Amazon Sign-In",
+    emailInput: true,
+    signInForm: true
+  });
+  assert.equal(login.needsAttention, true);
+  assert.equal(login.kind, "login");
+
+  const suspected = classifySessionStatus({
+    url: "https://www.amazon.it/vine/vine-items?queue=potluck",
+    title: "Accedi",
+    signInText: true,
+    hasVineText: false,
+    hasVineCard: false,
+    hasVineUrl: true
+  });
+  assert.equal(suspected.needsAttention, true);
+  assert.equal(suspected.kind, "suspected-login");
+  assert.equal(suspected.confirmable, true);
+
+  const captcha = classifySessionStatus({
+    url: "https://www.amazon.it/errors/validateCaptcha",
+    title: "Robot Check",
+    captchaInput: true
+  });
+  assert.equal(captcha.needsAttention, true);
+  assert.equal(captcha.kind, "captcha");
+  assert.equal(captcha.confirmable, false);
+}
+
 function main() {
   testEuroParsing();
   testUrlCanonicalization();
   testScoringAndTriggers();
   testStorageEstimatedValue();
   testTelegramFormatting();
+  testSessionStatusClassification();
   console.log("Core tests OK");
 }
 

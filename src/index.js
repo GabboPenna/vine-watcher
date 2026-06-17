@@ -189,35 +189,61 @@ async function main() {
       consecutiveSessionAttentionFailures = 0;
     } catch (error) {
       if (error instanceof SessionNeedsAttentionError) {
-        consecutiveSessionAttentionFailures += 1;
-        const willStop =
-          config.stopOnSessionAttention &&
-          consecutiveSessionAttentionFailures >= config.sessionAttentionMaxFailures;
-
-        logger.error(
-          `${error.message} consecutive_session_attention=${consecutiveSessionAttentionFailures}/${config.sessionAttentionMaxFailures}`
-        );
-
-        if (
-          config.notifyCriticalErrors &&
-          (willStop || Date.now() - lastSessionAttentionNotificationAt > config.sessionAttentionCooldownMs)
-        ) {
-          lastSessionAttentionNotificationAt = Date.now();
-          await telegram
-            .sendSessionAttention(error, {
-              failureCount: consecutiveSessionAttentionFailures,
-              maxFailures: config.sessionAttentionMaxFailures,
-              willStop
-            })
-            .catch((telegramError) => {
-              logger.warn(`Session attention Telegram notification failed: ${telegramError.message}`);
-            });
+        let sessionAttentionConfirmed = true;
+        if (config.verifySessionAttention && error.confirmable) {
+          try {
+            const health = await scanner.verifySessionHealth();
+            if (health.ok) {
+              sessionAttentionConfirmed = false;
+              consecutiveSessionAttentionFailures = 0;
+              logger.warn(
+                `Session attention was not confirmed by the health check; continuing. ` +
+                  `original_kind=${error.kind} health_kind=${health.classification.kind}`
+              );
+            } else {
+              logger.warn(
+                `Session health check confirmed manual attention is needed: ` +
+                  `kind=${health.classification.kind}`
+              );
+            }
+          } catch (healthError) {
+            logger.warn(`Session health check failed; keeping original session failure: ${healthError.message}`);
+          }
         }
 
-        if (willStop) {
-          logger.error("Stopping watcher because Amazon session needs manual attention");
-          await shutdown("session attention", once ? 2 : 0);
-          return;
+        if (!sessionAttentionConfirmed) {
+          logger.info("Session attention counter reset after successful health check");
+        } else {
+          consecutiveSessionAttentionFailures += 1;
+          const willStop =
+            config.stopOnSessionAttention &&
+            consecutiveSessionAttentionFailures >= config.sessionAttentionMaxFailures;
+
+          logger.error(
+            `${error.message} consecutive_session_attention=${consecutiveSessionAttentionFailures}/${config.sessionAttentionMaxFailures}`
+          );
+
+          if (
+            config.notifyCriticalErrors &&
+            (willStop || Date.now() - lastSessionAttentionNotificationAt > config.sessionAttentionCooldownMs)
+          ) {
+            lastSessionAttentionNotificationAt = Date.now();
+            await telegram
+              .sendSessionAttention(error, {
+                failureCount: consecutiveSessionAttentionFailures,
+                maxFailures: config.sessionAttentionMaxFailures,
+                willStop
+              })
+              .catch((telegramError) => {
+                logger.warn(`Session attention Telegram notification failed: ${telegramError.message}`);
+              });
+          }
+
+          if (willStop) {
+            logger.error("Stopping watcher because Amazon session needs manual attention");
+            await shutdown("session attention", once ? 2 : 0);
+            return;
+          }
         }
       } else if (shuttingDown && isBrowserClosedError(error)) {
         logger.info("Scan interrupted by shutdown");

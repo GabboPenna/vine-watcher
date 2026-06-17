@@ -300,6 +300,7 @@ function loadConfig(overrides = {}) {
     sessionAttentionMaxFailures: parseNumber(readEnv("SESSION_ATTENTION_MAX_FAILURES", "2"), 2, 1),
     sessionAttentionCooldownMs:
       parseNumber(readEnv("SESSION_ATTENTION_COOLDOWN_SECONDS", "300"), 300, 60) * 1000,
+    verifySessionAttention: parseBool(readEnv("VERIFY_SESSION_ATTENTION", "true"), true),
     stopOnSessionAttention: parseBool(
       readEnv("STOP_ON_SESSION_ATTENTION", readEnv("EXIT_ON_SESSION_ATTENTION", "true")),
       true
