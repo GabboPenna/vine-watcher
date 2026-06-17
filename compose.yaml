@@ -1,0 +1,52 @@
+name: vine-watcher
+
+services:
+  watcher:
+    image: ${VINE_WATCHER_IMAGE:-gabbopenna/vine-watcher:latest}
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    shm_size: 1gb
+    env_file:
+      - path: ${VINE_WATCHER_ENV_FILE:-./.env}
+        required: false
+    environment:
+      NODE_ENV: production
+      HEADLESS: "true"
+      CHROMIUM_NO_SANDBOX: "true"
+      DATABASE_PATH: /data/vine-watcher.sqlite
+      PLAYWRIGHT_USER_DATA_DIR: /data/chromium-profile
+    volumes:
+      - vine-data:/data
+
+  login:
+    image: ${VINE_WATCHER_IMAGE:-gabbopenna/vine-watcher:latest}
+    build:
+      context: .
+    profiles:
+      - login
+    init: true
+    shm_size: 1gb
+    env_file:
+      - path: ${VINE_WATCHER_ENV_FILE:-./.env}
+        required: false
+    environment:
+      NODE_ENV: production
+      HEADLESS: "false"
+      CHROMIUM_NO_SANDBOX: "true"
+      DATABASE_PATH: /data/vine-watcher.sqlite
+      PLAYWRIGHT_USER_DATA_DIR: /data/chromium-profile
+      DISPLAY_ID: ":99"
+      LOGIN_WAIT_FILE: /tmp/vine-watcher-login/done
+      NOVNC_PORT: "6080"
+      NOVNC_PUBLIC_HOST: ${NOVNC_PUBLIC_HOST:-localhost}
+      VNC_PASSWORD: ${VNC_PASSWORD:-}
+    ports:
+      - "${NOVNC_BIND:-127.0.0.1}:${NOVNC_PORT:-6080}:6080"
+    volumes:
+      - vine-data:/data
+    command: ["bash", "scripts/docker-login.sh"]
+
+volumes:
+  vine-data:

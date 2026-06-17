@@ -35,6 +35,7 @@ If Amazon asks for login, 2FA, CAPTCHA, or any manual verification, the watcher 
 - Optional critical-error Telegram alerts.
 - Systemd service example.
 - Guided Debian installer.
+- Dockerfile and Docker Compose stack with persistent data volume.
 - Temporary noVNC helper for Amazon login on headless servers.
 - CSV export and local stats command.
 
@@ -88,6 +89,62 @@ The installer guides you through:
 - systemd service installation
 
 The installer does not ask for your Amazon password. Amazon login is always manual.
+
+## Docker Compose
+
+Docker Compose is the quickest way to run the watcher as a portable service. It keeps SQLite and the Chromium profile in a named Docker volume called `vine-watcher_vine-data`.
+
+Create your config:
+
+```bash
+cp compose.env.example .env
+nano .env
+```
+
+Build and run from local source:
+
+```bash
+docker compose build
+docker compose up -d watcher
+docker compose logs -f watcher
+```
+
+The first run needs a manual Amazon login. Stop the watcher, start the temporary noVNC login container, complete login, then save the profile:
+
+```bash
+docker compose stop watcher
+docker compose --profile login up login
+```
+
+Open the printed noVNC URL and enter the printed password. When Vine is visible and stable, run this in a second terminal:
+
+```bash
+npm run docker:login:finish
+```
+
+Then start the watcher again:
+
+```bash
+docker compose up -d watcher
+docker compose logs -f watcher
+```
+
+To use a published image instead of building locally, set `VINE_WATCHER_IMAGE` in `.env`, then:
+
+```bash
+docker compose pull watcher
+docker compose up -d watcher
+```
+
+Useful Docker commands:
+
+```bash
+npm run docker:build
+npm run docker:up
+npm run docker:logs
+npm run docker:login
+npm run docker:login:finish
+```
 
 ## Manual Install
 
@@ -308,6 +365,10 @@ npm run test:telegram      # send a Telegram test message
 npm run stats              # show SQLite stats
 npm run export:csv         # export seen products to CSV
 npm run panic:status       # show panic settings
+npm run docker:build       # build local Docker image
+npm run docker:up          # start Docker watcher service
+npm run docker:login       # start Docker noVNC login helper
+npm run docker:login:finish # save Docker browser profile after login
 ```
 
 ## Quality Gates
@@ -327,6 +388,32 @@ Run the same suite locally:
 ```bash
 npm run validate
 ```
+
+## Docker Image Releases
+
+The Docker workflow builds the image on pushes and pull requests. It publishes to Docker Hub only when you push a semver tag such as `v0.2.0`.
+
+GitHub repository settings required for Docker Hub publishing:
+
+- secret `DOCKERHUB_USERNAME`
+- secret `DOCKERHUB_TOKEN`
+- optional repository variable `DOCKERHUB_REPOSITORY`, for example `your-dockerhub-user/vine-watcher`
+
+Release flow:
+
+```bash
+npm version patch
+git push
+git push --tags
+```
+
+Tag `v1.2.3` publishes Docker tags:
+
+- `1.2.3`
+- `1.2`
+- `1`
+- `latest`
+- `sha-<commit>`
 
 ## Session Health
 

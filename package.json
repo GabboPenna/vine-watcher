@@ -41,7 +41,12 @@
     "test:telegram": "node scripts/test-telegram.js",
     "stats": "node scripts/stats.js",
     "export:csv": "node scripts/export-csv.js",
-    "panic:status": "bash scripts/panic.sh status"
+    "panic:status": "bash scripts/panic.sh status",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d watcher",
+    "docker:logs": "docker compose logs -f watcher",
+    "docker:login": "docker compose --profile login up login",
+    "docker:login:finish": "bash scripts/docker-login-finish.sh"
   },
   "dependencies": {
     "better-sqlite3": ">=11 <14",

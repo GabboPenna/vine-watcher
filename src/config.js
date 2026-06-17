@@ -284,6 +284,7 @@ function loadConfig(overrides = {}) {
     strictMaxNegativeSignals: parseNumber(readEnv("STRICT_MAX_NEGATIVE_SIGNALS", "0"), 0, 0),
     maxNotificationsPerCycle: parseNumber(readEnv("MAX_NOTIFICATIONS_PER_CYCLE", "5"), 5, 1),
     headless: parseBool(readEnv("HEADLESS", "false"), false),
+    chromiumNoSandbox: parseBool(readEnv("CHROMIUM_NO_SANDBOX", "false"), false),
     pageTimeoutMs: parseNumber(readEnv("PAGE_TIMEOUT_SECONDS", "45"), 45, 5) * 1000,
     waitForNetworkIdle: parseBool(readEnv("WAIT_FOR_NETWORK_IDLE", "false"), false),
     productReadyTimeoutMs: parseNumber(readEnv("PRODUCT_READY_TIMEOUT_SECONDS", "5"), 5, 1) * 1000,

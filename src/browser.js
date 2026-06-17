@@ -7,6 +7,11 @@ async function createBrowserContext(config, logger, options = {}) {
   ensureDir(config.playwrightUserDataDir);
 
   const headless = options.headless ?? config.headless;
+  const args = ["--disable-dev-shm-usage"];
+  if (config.chromiumNoSandbox) {
+    args.push("--no-sandbox");
+  }
+
   logger.info(`Opening Chromium persistent context in ${headless ? "headless" : "headed"} mode`);
 
   const context = await chromium.launchPersistentContext(config.playwrightUserDataDir, {
@@ -18,7 +23,7 @@ async function createBrowserContext(config, logger, options = {}) {
       width: 1365,
       height: 900
     },
-    args: ["--disable-dev-shm-usage"]
+    args
   });
 
   context.setDefaultTimeout(config.pageTimeoutMs);
