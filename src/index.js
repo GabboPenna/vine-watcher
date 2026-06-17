@@ -9,6 +9,54 @@ const { ProductStorage } = require("./storage");
 const { delayWithJitter, sleep } = require("./utils");
 const { TelegramClient } = require("./telegram");
 
+function isPanicActive(config) {
+  return Boolean(config.panicMode || (config.panicUntilMs && Date.now() < config.panicUntilMs));
+}
+
+function nextScanDelayMs(config) {
+  if (isPanicActive(config)) {
+    return delayWithJitter(config.panicScanIntervalSeconds, config.panicScanJitterSeconds);
+  }
+  return delayWithJitter(config.scanIntervalSeconds, config.scanJitterSeconds);
+}
+
+function formatEuro(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return "n/a";
+  }
+  return `€${parsed.toFixed(2)}`;
+}
+
+function notificationTriggers(product, scoring, config) {
+  const triggers = [];
+  const estimatedValue = Number(product.estimated_value_eur);
+  const valueTrigger =
+    config.minValueToNotifyEur > 0 &&
+    Number.isFinite(estimatedValue) &&
+    estimatedValue >= config.minValueToNotifyEur;
+
+  if (valueTrigger) {
+    triggers.push(`estimated value ${formatEuro(estimatedValue)} >= ${formatEuro(config.minValueToNotifyEur)}`);
+  }
+
+  if (scoring.score >= config.minScoreToNotify) {
+    if (!config.strictNotifyMode) {
+      triggers.push(`score ${scoring.score} >= ${config.minScoreToNotify}`);
+    } else if (
+      scoring.positiveSignals >= config.strictMinPositiveSignals &&
+      scoring.negativeSignals <= config.strictMaxNegativeSignals
+    ) {
+      triggers.push(
+        `strict score ${scoring.score} >= ${config.minScoreToNotify} ` +
+          `(${scoring.positiveSignals} positive, ${scoring.negativeSignals} negative)`
+      );
+    }
+  }
+
+  return triggers;
+}
+
 async function runCycle({ scanner, storage, telegram, config, logger }) {
   const startedAt = Date.now();
   const products = await scanner.scanAllSections();
@@ -25,27 +73,38 @@ async function runCycle({ scanner, storage, telegram, config, logger }) {
     const saved = storage.saveProduct(product, scoring);
     if (saved.isNew) {
       newProducts += 1;
-      logger.info(`New product score=${scoring.score} section="${product.section}" title="${product.title}"`);
+      logger.info(
+        `New product score=${scoring.score} value=${formatEuro(product.estimated_value_eur)} ` +
+          `section="${product.section}" title="${product.title}"`
+      );
     }
 
-    const shouldNotify = saved.product.notified !== 1 && scoring.score >= config.minScoreToNotify;
+    const triggers = notificationTriggers(saved.product, scoring, config);
+    const shouldNotify = saved.product.notified !== 1 && triggers.length > 0;
     if (!shouldNotify) {
       continue;
     }
 
     if (notified >= config.maxNotificationsPerCycle) {
       logger.warn(
-        `Notification limit reached; not notifying score=${scoring.score} title="${product.title}"`
+        `Notification limit reached; not notifying score=${scoring.score} ` +
+          `value=${formatEuro(saved.product.estimated_value_eur)} title="${product.title}"`
       );
       continue;
     }
 
     try {
-      const sent = await telegram.sendProduct(saved.product, scoring);
+      const sent = await telegram.sendProduct(saved.product, {
+        ...scoring,
+        notificationTriggers: triggers
+      });
       if (sent) {
         storage.markNotified(saved.product.id);
         notified += 1;
-        logger.info(`Telegram notification sent for product id=${saved.product.id} score=${scoring.score}`);
+        logger.info(
+          `Telegram notification sent for product id=${saved.product.id} score=${scoring.score} ` +
+            `value=${formatEuro(saved.product.estimated_value_eur)} triggers="${triggers.join("; ")}"`
+        );
       }
     } catch (error) {
       logger.error(`Telegram notification failed for product id=${saved.product.id}: ${error.message}`);
@@ -105,6 +164,13 @@ async function main() {
   });
 
   logger.info(`Configured sections: ${config.sections.map((section) => section.name).join(", ")}`);
+  if (config.panicMode || config.panicUntilMs) {
+    const until = config.panicUntilMs ? new Date(config.panicUntilMs).toISOString() : "manual stop";
+    logger.info(
+      `Panic mode configured: active=${isPanicActive(config)} until=${until} ` +
+        `interval=${config.panicScanIntervalSeconds}s jitter=${config.panicScanJitterSeconds}s`
+    );
+  }
 
   do {
     try {
@@ -138,8 +204,8 @@ async function main() {
       break;
     }
 
-    const waitMs = delayWithJitter(config.scanIntervalSeconds, config.scanJitterSeconds);
-    logger.info(`Next scan in ${Math.round(waitMs / 1000)}s`);
+    const waitMs = nextScanDelayMs(config);
+    logger.info(`Next scan in ${Math.round(waitMs / 1000)}s${isPanicActive(config) ? " (panic mode)" : ""}`);
     await sleep(waitMs);
   } while (!shuttingDown);
 
@@ -157,5 +223,6 @@ if (require.main === module) {
 }
 
 module.exports = {
+  notificationTriggers,
   runCycle
 };

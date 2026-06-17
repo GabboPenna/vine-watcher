@@ -171,6 +171,21 @@ function parseNumber(value, fallback, min = undefined) {
   return parsed;
 }
 
+function parseTimestampMs(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return 0;
+  }
+
+  const numeric = Number(text);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric > 100000000000 ? numeric : numeric * 1000;
+  }
+
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function resolveProjectPath(value) {
   if (path.isAbsolute(value)) {
     return value;
@@ -234,6 +249,10 @@ function loadSections(baseUrl) {
 
 function loadConfig(overrides = {}) {
   const amazonVineBaseUrl = readEnv("AMAZON_VINE_BASE_URL", "https://www.amazon.it/vine/vine-items");
+  const panicWindowMinutes = parseNumber(readEnv("PANIC_WINDOW_MINUTES", "0"), 0, 0);
+  const panicUntilMs =
+    parseTimestampMs(readEnv("PANIC_UNTIL", "")) ||
+    (panicWindowMinutes > 0 ? Date.now() + panicWindowMinutes * 60 * 1000 : 0);
 
   return {
     projectRoot,
@@ -243,7 +262,15 @@ function loadConfig(overrides = {}) {
     sections: loadSections(amazonVineBaseUrl),
     scanIntervalSeconds: parseNumber(readEnv("SCAN_INTERVAL_SECONDS", "30"), 30, 10),
     scanJitterSeconds: parseNumber(readEnv("SCAN_JITTER_SECONDS", "10"), 10, 0),
-    minScoreToNotify: parseNumber(readEnv("MIN_SCORE_TO_NOTIFY", "15"), 15),
+    panicMode: parseBool(readEnv("PANIC_MODE", "false"), false),
+    panicUntilMs,
+    panicScanIntervalSeconds: parseNumber(readEnv("PANIC_SCAN_INTERVAL_SECONDS", "10"), 10, 5),
+    panicScanJitterSeconds: parseNumber(readEnv("PANIC_SCAN_JITTER_SECONDS", "3"), 3, 0),
+    minScoreToNotify: parseNumber(readEnv("MIN_SCORE_TO_NOTIFY", "20"), 20),
+    minValueToNotifyEur: parseNumber(readEnv("MIN_VALUE_TO_NOTIFY_EUR", "50"), 50, 0),
+    strictNotifyMode: parseBool(readEnv("STRICT_NOTIFY_MODE", "true"), true),
+    strictMinPositiveSignals: parseNumber(readEnv("STRICT_MIN_POSITIVE_SIGNALS", "2"), 2, 0),
+    strictMaxNegativeSignals: parseNumber(readEnv("STRICT_MAX_NEGATIVE_SIGNALS", "0"), 0, 0),
     maxNotificationsPerCycle: parseNumber(readEnv("MAX_NOTIFICATIONS_PER_CYCLE", "5"), 5, 1),
     headless: parseBool(readEnv("HEADLESS", "false"), false),
     pageTimeoutMs: parseNumber(readEnv("PAGE_TIMEOUT_SECONDS", "45"), 45, 5) * 1000,

@@ -2,6 +2,14 @@
 
 const { truncate } = require("./utils");
 
+function formatEuro(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return "";
+  }
+  return `€${parsed.toFixed(2)}`;
+}
+
 class TelegramClient {
   constructor(config, logger) {
     this.token = config.telegramBotToken;
@@ -41,11 +49,17 @@ class TelegramClient {
 
   formatProductMessage(product, scoring) {
     const reasons = scoring.reasons && scoring.reasons.length > 0 ? scoring.reasons : ["no specific reason"];
+    const triggers =
+      scoring.notificationTriggers && scoring.notificationTriggers.length > 0
+        ? scoring.notificationTriggers
+        : [];
+    const estimatedValue = formatEuro(product.estimated_value_eur);
     const vineUrl = product.section_url || product.url || "";
     const lines = [
       "\u{1F6A8} New interesting Vine product",
       "",
       `Score: ${scoring.score}`,
+      `Signals: ${scoring.positiveSignals || 0} positive / ${scoring.negativeSignals || 0} negative`,
       `Section: ${product.section || "n/a"}`,
       "",
       "Title:",
@@ -54,6 +68,14 @@ class TelegramClient {
       "Reasons:",
       ...reasons.map((reason) => `- ${reason}`)
     ];
+
+    if (estimatedValue) {
+      lines.splice(4, 0, `Estimated value: ${estimatedValue}`);
+    }
+
+    if (triggers.length > 0) {
+      lines.push("", "Notification trigger:", ...triggers.map((trigger) => `- ${trigger}`));
+    }
 
     if (vineUrl) {
       lines.push("", "Open Vine section:", vineUrl);

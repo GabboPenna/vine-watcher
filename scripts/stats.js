@@ -24,7 +24,7 @@ function main() {
   console.log("By section");
   printTable(stats.bySection, ["section", "total", "notified"]);
   console.log("Top products");
-  printTable(stats.topProducts, ["id", "score", "notified", "section", "asin", "title"]);
+  printTable(stats.topProducts, ["id", "score", "estimated_value_eur", "notified", "section", "asin", "title"]);
 
   storage.close();
 }

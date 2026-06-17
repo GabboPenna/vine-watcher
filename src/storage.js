@@ -10,6 +10,15 @@ const {
   truncate
 } = require("./utils");
 
+function normalizeEstimatedValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 class ProductStorage {
   constructor(databasePath, logger) {
     this.databasePath = databasePath;
@@ -32,6 +41,7 @@ class ProductStorage {
         section_url TEXT,
         image_url TEXT,
         section TEXT,
+        estimated_value_eur REAL,
         first_seen_at TEXT NOT NULL,
         last_seen_at TEXT NOT NULL,
         score INTEGER NOT NULL DEFAULT 0,
@@ -57,6 +67,9 @@ class ProductStorage {
     if (!columns.includes("section_url")) {
       this.db.exec("ALTER TABLE products ADD COLUMN section_url TEXT");
     }
+    if (!columns.includes("estimated_value_eur")) {
+      this.db.exec("ALTER TABLE products ADD COLUMN estimated_value_eur REAL");
+    }
   }
 
   prepareStatements() {
@@ -69,6 +82,7 @@ class ProductStorage {
         section_url,
         image_url,
         section,
+        estimated_value_eur,
         first_seen_at,
         last_seen_at,
         score,
@@ -83,6 +97,7 @@ class ProductStorage {
         @section_url,
         @image_url,
         @section,
+        @estimated_value_eur,
         @now,
         @now,
         @score,
@@ -102,6 +117,7 @@ class ProductStorage {
         section_url = COALESCE(NULLIF(@section_url, ''), section_url),
         image_url = COALESCE(NULLIF(@image_url, ''), image_url),
         section = @section,
+        estimated_value_eur = @estimated_value_eur,
         last_seen_at = @now,
         score = @score,
         reasons_json = @reasons_json,
@@ -154,6 +170,7 @@ class ProductStorage {
       section_url: product.section_url || "",
       image_url: product.image_url || "",
       section: product.section || "",
+      estimated_value_eur: normalizeEstimatedValue(product.estimated_value_eur),
       now,
       score: scoring.score,
       reasons_json: JSON.stringify(scoring.reasons || []),
@@ -200,7 +217,8 @@ class ProductStorage {
           COUNT(*) AS total,
           SUM(CASE WHEN notified = 1 THEN 1 ELSE 0 END) AS notified,
           MAX(score) AS max_score,
-          AVG(score) AS avg_score
+          AVG(score) AS avg_score,
+          MAX(estimated_value_eur) AS max_estimated_value_eur
         FROM products`
       )
       .get();
@@ -216,9 +234,9 @@ class ProductStorage {
 
     const topProducts = this.db
       .prepare(
-        `SELECT id, asin, title, section, score, notified, first_seen_at, url, section_url
+        `SELECT id, asin, title, section, estimated_value_eur, score, notified, first_seen_at, url, section_url
          FROM products
-         ORDER BY score DESC, first_seen_at DESC
+         ORDER BY score DESC, estimated_value_eur DESC, first_seen_at DESC
          LIMIT 20`
       )
       .all();
@@ -233,7 +251,7 @@ class ProductStorage {
   exportCsv(outputPath) {
     const rows = this.db
       .prepare(
-        `SELECT id, asin, title, normalized_title, url, section_url, image_url, section, first_seen_at, last_seen_at, score, reasons_json, notified
+        `SELECT id, asin, title, normalized_title, url, section_url, image_url, section, estimated_value_eur, first_seen_at, last_seen_at, score, reasons_json, notified
          FROM products
          ORDER BY first_seen_at DESC`
       )
@@ -249,6 +267,7 @@ class ProductStorage {
       "section_url",
       "image_url",
       "section",
+      "estimated_value_eur",
       "first_seen_at",
       "last_seen_at",
       "score",

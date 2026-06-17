@@ -123,13 +123,15 @@ write_env() {
     return
   fi
 
-  local telegram_token telegram_chat_id vine_url scan_interval scan_jitter min_score max_notifications headless notify_errors
+  local telegram_token telegram_chat_id vine_url scan_interval scan_jitter min_score min_value strict_mode max_notifications headless notify_errors
   telegram_token="$(prompt_secret "Telegram bot token")"
   telegram_chat_id="$(prompt "Telegram chat id")"
   vine_url="$(prompt "Amazon Vine base URL" "https://www.amazon.it/vine/vine-items")"
   scan_interval="$(prompt "Scan interval in seconds" "60")"
   scan_jitter="$(prompt "Random jitter in seconds" "15")"
-  min_score="$(prompt "Minimum score to notify" "15")"
+  min_score="$(prompt "Minimum score to notify" "20")"
+  min_value="$(prompt "Always notify when estimated value is at least EUR" "50")"
+  strict_mode="$(prompt "Use stricter score filtering? true/false" "true")"
   max_notifications="$(prompt "Maximum notifications per scan" "5")"
   headless="$(prompt "Run Chromium headless after login? true/false" "true")"
   notify_errors="$(prompt "Notify critical errors on Telegram? true/false" "true")"
@@ -142,7 +144,15 @@ AMAZON_VINE_BASE_URL=${vine_url}
 SCAN_ALL_ITEMS=false
 SCAN_INTERVAL_SECONDS=${scan_interval}
 SCAN_JITTER_SECONDS=${scan_jitter}
+PANIC_MODE=false
+PANIC_UNTIL=
+PANIC_SCAN_INTERVAL_SECONDS=10
+PANIC_SCAN_JITTER_SECONDS=3
 MIN_SCORE_TO_NOTIFY=${min_score}
+MIN_VALUE_TO_NOTIFY_EUR=${min_value}
+STRICT_NOTIFY_MODE=${strict_mode}
+STRICT_MIN_POSITIVE_SIGNALS=2
+STRICT_MAX_NEGATIVE_SIGNALS=0
 MAX_NOTIFICATIONS_PER_CYCLE=${max_notifications}
 HEADLESS=${headless}
 PAGE_TIMEOUT_SECONDS=45

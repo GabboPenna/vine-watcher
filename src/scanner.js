@@ -6,6 +6,7 @@ const {
   extractAsinFromText,
   normalizeTitle,
   normalizeWhitespace,
+  parseEuroValue,
   sleep,
   truncate,
   uniqueProducts
@@ -92,6 +93,11 @@ class VineScanner {
     const rawText = normalizeWhitespace(rawProduct.raw_text || "");
     const title = normalizeWhitespace(rawProduct.title || rawProduct.image_alt || "");
     const url = canonicalizeAmazonUrl(rawProduct.url, section.url || this.config.amazonVineBaseUrl);
+    const estimatedValueEur = parseEuroValue(
+      [rawProduct.estimated_value_eur, rawProduct.raw_text, rawProduct.title, rawProduct.image_alt]
+        .filter(Boolean)
+        .join(" ")
+    );
     const asin =
       normalizeWhitespace(rawProduct.asin || "") ||
       extractAsinFromText([url, rawProduct.asin_source, rawText].filter(Boolean).join(" "));
@@ -104,6 +110,7 @@ class VineScanner {
       image_url: canonicalizeUrl(rawProduct.image_url, section.url || this.config.amazonVineBaseUrl),
       section: section.name,
       section_url: section.url || this.config.amazonVineBaseUrl,
+      estimated_value_eur: estimatedValueEur,
       raw_text: truncate(rawText, 4000)
     };
   }

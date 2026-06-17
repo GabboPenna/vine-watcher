@@ -75,6 +75,40 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+function parseEuroValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  const text = String(value || "");
+  const patterns = [
+    { regex: /(?:€|eur\b)\s*(\d{1,5}(?:[.\s]\d{3})*(?:,\d{1,2})?)/gi, integerOnly: false },
+    { regex: /(\d{1,5}(?:[.\s]\d{3})*,\d{1,2})\s*(?:€|eur\b)/gi, integerOnly: false },
+    { regex: /(\d{1,5}(?:[.\s]\d{3})*)\s*(?:€|eur\b)/gi, integerOnly: true }
+  ];
+  const values = [];
+
+  for (const pattern of patterns) {
+    let match = pattern.regex.exec(text);
+    while (match) {
+      const before = text.slice(0, match.index).replace(/\s+$/g, "");
+      if (pattern.integerOnly && /[,.]$/.test(before)) {
+        match = pattern.regex.exec(text);
+        continue;
+      }
+
+      const normalized = match[1].replace(/[.\s]/g, "").replace(",", ".");
+      const parsed = Number(normalized);
+      if (Number.isFinite(parsed) && parsed > 0 && parsed < 100000) {
+        values.push(parsed);
+      }
+      match = pattern.regex.exec(text);
+    }
+  }
+
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
 function extractAsinFromText(value) {
   const text = String(value || "");
   const direct = text.match(/(?:\/dp\/|\/gp\/product\/|asin[=/: ]|data-asin=["']?)([A-Z0-9]{10})/i);
@@ -166,6 +200,7 @@ module.exports = {
   normalizeTitle,
   normalizeWhitespace,
   nowIso,
+  parseEuroValue,
   safeJsonParse,
   sleep,
   truncate,

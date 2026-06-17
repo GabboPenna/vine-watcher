@@ -35,7 +35,8 @@
     "server-login:stop": "bash scripts/server-login.sh stop",
     "test:telegram": "node scripts/test-telegram.js",
     "stats": "node scripts/stats.js",
-    "export:csv": "node scripts/export-csv.js"
+    "export:csv": "node scripts/export-csv.js",
+    "panic:status": "bash scripts/panic.sh status"
   },
   "dependencies": {
     "better-sqlite3": ">=11 <14",

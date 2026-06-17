@@ -25,6 +25,9 @@ If Amazon asks for login, 2FA, CAPTCHA, or any manual verification, the watcher 
 - SQLite database of seen products.
 - Telegram Bot API notifications.
 - Keyword and brand scoring tuned for smart home, tools, electronics, and useful household items.
+- Estimated-value override for products whose visible Vine card shows a value above your threshold.
+- Optional strict notification filter to reduce noisy alerts.
+- Temporary panic mode for short, aggressive scan windows.
 - Duplicate detection by ASIN, URL, or normalized title.
 - Anti-spam limit per scan cycle.
 - Optional critical-error Telegram alerts.
@@ -43,10 +46,14 @@ Each message includes:
 - Vine section
 - product title
 - scoring reasons
+- notification trigger
+- estimated value, when visible in the Vine card
 - Vine section link
 - ASIN, when available
 
 If an image URL is available, the watcher sends a Telegram photo with the same caption. If photo sending fails, it falls back to a text message.
+
+The value override is read-only and only uses prices or values already visible in the Vine card. The watcher does not click product details to discover hidden prices.
 
 ## Requirements
 
@@ -113,7 +120,15 @@ TELEGRAM_CHAT_ID=123456789
 AMAZON_VINE_BASE_URL=https://www.amazon.it/vine/vine-items
 SCAN_INTERVAL_SECONDS=30
 SCAN_JITTER_SECONDS=10
-MIN_SCORE_TO_NOTIFY=15
+PANIC_MODE=false
+PANIC_UNTIL=
+PANIC_SCAN_INTERVAL_SECONDS=10
+PANIC_SCAN_JITTER_SECONDS=3
+MIN_SCORE_TO_NOTIFY=20
+MIN_VALUE_TO_NOTIFY_EUR=50
+STRICT_NOTIFY_MODE=true
+STRICT_MIN_POSITIVE_SIGNALS=2
+STRICT_MAX_NEGATIVE_SIGNALS=0
 MAX_NOTIFICATIONS_PER_CYCLE=5
 HEADLESS=true
 DATABASE_PATH=./data/vine-watcher.sqlite
@@ -216,6 +231,31 @@ Cycle complete: scanned=N new=N notified=N max_score=N
 
 If login is required, rerun the Amazon login step. The watcher will not bypass it.
 
+## Panic Mode
+
+Panic mode temporarily lowers the wait between scan cycles. It is useful when you are actively watching Vine and want faster alerts for a short window.
+
+Enable 30 minutes of panic mode:
+
+```bash
+sudo /opt/vine-watcher-telegram/scripts/panic.sh on 30
+```
+
+Enable 15 minutes with a 10-second base interval and up to 3 seconds of jitter:
+
+```bash
+sudo /opt/vine-watcher-telegram/scripts/panic.sh on 15 10 3
+```
+
+Check or disable it:
+
+```bash
+sudo /opt/vine-watcher-telegram/scripts/panic.sh status
+sudo /opt/vine-watcher-telegram/scripts/panic.sh off
+```
+
+Panic mode updates `.env` and restarts the systemd service.
+
 ## Systemd
 
 Install and start:
@@ -255,6 +295,7 @@ npm run start              # continuous loop
 npm run test:telegram      # send a Telegram test message
 npm run stats              # show SQLite stats
 npm run export:csv         # export seen products to CSV
+npm run panic:status       # show panic settings
 ```
 
 ## Scoring
@@ -272,6 +313,8 @@ Rules:
 - `-5` generic-accessory malus
 - `-10` replacement/niche-item malus
 
+With strict notifications enabled, score-based alerts must also have at least `STRICT_MIN_POSITIVE_SIGNALS` positive signals and no more than `STRICT_MAX_NEGATIVE_SIGNALS` negative signals. The value override bypasses this strict filter: if `estimated_value_eur >= MIN_VALUE_TO_NOTIFY_EUR`, the product is notified anyway.
+
 The score result includes a `reasons` array, saved as `reasons_json` in SQLite and shown in Telegram messages.
 
 ## SQLite
@@ -288,6 +331,7 @@ The database is created automatically at `DATABASE_PATH`.
 - `section_url`
 - `image_url`
 - `section`
+- `estimated_value_eur`
 - `first_seen_at`
 - `last_seen_at`
 - `score`
