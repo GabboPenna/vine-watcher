@@ -32,7 +32,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev \
+RUN npm ci --omit=dev --loglevel=error \
   && npx playwright install --with-deps chromium \
   && npm cache clean --force \
   && mkdir -p /data /ms-playwright \

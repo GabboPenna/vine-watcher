@@ -26,6 +26,35 @@ function isBrowserClosedError(error) {
   return /Target page, context or browser has been closed/i.test(error && error.message ? error.message : String(error));
 }
 
+function summarizeSessionStatus(status = {}) {
+  const flags = [];
+  for (const key of [
+    "passwordInput",
+    "emailInput",
+    "signInForm",
+    "captchaInput",
+    "captchaText",
+    "signInText",
+    "hasVineCard",
+    "hasVineText",
+    "hasVineUrl"
+  ]) {
+    if (status[key]) {
+      flags.push(key);
+    }
+  }
+
+  let path = "unknown";
+  try {
+    const parsed = new URL(String(status.url || ""));
+    path = parsed.pathname || "/";
+  } catch (_error) {
+    path = "unknown";
+  }
+
+  return `url_path=${path} title="${truncate(status.title || "", 80)}" flags=${flags.join(",") || "none"}`;
+}
+
 function classifySessionStatus(status, sectionName = "Vine") {
   const url = String(status.url || "").toLowerCase();
   const title = String(status.title || "").toLowerCase();
@@ -560,5 +589,6 @@ module.exports = {
   classifySessionStatus,
   isBrowserClosedError,
   SessionNeedsAttentionError,
+  summarizeSessionStatus,
   VineScanner
 };

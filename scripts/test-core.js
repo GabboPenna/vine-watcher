@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { loadConfig } = require("../src/config");
-const { notificationTriggers } = require("../src/index");
+const { notificationTriggers, shouldDeferSessionAttention } = require("../src/index");
 const { classifySessionStatus } = require("../src/scanner");
 const { scoreProduct } = require("../src/scorer");
 const { ProductStorage } = require("../src/storage");
@@ -201,6 +201,44 @@ function testSessionStatusClassification() {
   assert.equal(captcha.confirmable, false);
 }
 
+function testSessionAttentionDeferral() {
+  const config = loadConfig({
+    sessionAttentionGraceMs: 300000,
+    sessionFailureBackoffMs: 90000
+  });
+  const now = Date.parse("2026-06-17T19:42:30Z");
+
+  assert.equal(
+    shouldDeferSessionAttention(
+      { kind: "login", confirmable: true },
+      config,
+      now - 30000,
+      now
+    ),
+    true
+  );
+
+  assert.equal(
+    shouldDeferSessionAttention(
+      { kind: "login", confirmable: true },
+      config,
+      now - 600000,
+      now
+    ),
+    false
+  );
+
+  assert.equal(
+    shouldDeferSessionAttention(
+      { kind: "captcha", confirmable: false },
+      config,
+      now - 30000,
+      now
+    ),
+    false
+  );
+}
+
 function main() {
   testEuroParsing();
   testUrlCanonicalization();
@@ -208,6 +246,7 @@ function main() {
   testStorageEstimatedValue();
   testTelegramFormatting();
   testSessionStatusClassification();
+  testSessionAttentionDeferral();
   console.log("Core tests OK");
 }
 

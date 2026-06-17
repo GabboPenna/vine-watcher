@@ -4,7 +4,12 @@ const { createBrowserContext } = require("./browser");
 const { loadConfig } = require("./config");
 const { createLogger } = require("./logger");
 const { scoreProduct } = require("./scorer");
-const { isBrowserClosedError, SessionNeedsAttentionError, VineScanner } = require("./scanner");
+const {
+  isBrowserClosedError,
+  SessionNeedsAttentionError,
+  summarizeSessionStatus,
+  VineScanner
+} = require("./scanner");
 const { ProductStorage } = require("./storage");
 const { delayWithJitter, sleep } = require("./utils");
 const { TelegramClient } = require("./telegram");
@@ -18,6 +23,23 @@ function nextScanDelayMs(config) {
     return delayWithJitter(config.panicScanIntervalSeconds, config.panicScanJitterSeconds);
   }
   return delayWithJitter(config.scanIntervalSeconds, config.scanJitterSeconds);
+}
+
+function secondsSince(timestampMs, now = Date.now()) {
+  if (!timestampMs) {
+    return null;
+  }
+  return Math.max(0, Math.round((now - timestampMs) / 1000));
+}
+
+function shouldDeferSessionAttention(error, config, lastKnownGoodSessionAt, now = Date.now()) {
+  if (!error || error.kind === "captcha" || error.confirmable === false) {
+    return false;
+  }
+  if (!config.sessionAttentionGraceMs || config.sessionAttentionGraceMs <= 0 || !lastKnownGoodSessionAt) {
+    return false;
+  }
+  return now - lastKnownGoodSessionAt < config.sessionAttentionGraceMs;
 }
 
 function formatEuro(value) {
@@ -139,6 +161,9 @@ async function main() {
   let lastCriticalNotificationAt = 0;
   let lastSessionAttentionNotificationAt = 0;
   let consecutiveSessionAttentionFailures = 0;
+  let lastKnownGoodSessionAt = Date.now();
+  let nextDelayOverrideMs = 0;
+  let nextDelayReason = "";
 
   async function shutdown(signal, exitCode = 0) {
     if (shuttingDown) {
@@ -187,23 +212,28 @@ async function main() {
     try {
       await runCycle({ scanner, storage, telegram, config, logger });
       consecutiveSessionAttentionFailures = 0;
+      lastKnownGoodSessionAt = Date.now();
     } catch (error) {
       if (error instanceof SessionNeedsAttentionError) {
         let sessionAttentionConfirmed = true;
+        let confirmedHealthStatus = null;
         if (config.verifySessionAttention && error.confirmable) {
           try {
             const health = await scanner.verifySessionHealth();
+            confirmedHealthStatus = health.status;
             if (health.ok) {
               sessionAttentionConfirmed = false;
               consecutiveSessionAttentionFailures = 0;
+              lastKnownGoodSessionAt = Date.now();
               logger.warn(
                 `Session attention was not confirmed by the health check; continuing. ` +
-                  `original_kind=${error.kind} health_kind=${health.classification.kind}`
+                  `original_kind=${error.kind} health_kind=${health.classification.kind} ` +
+                  `health=${summarizeSessionStatus(health.status)}`
               );
             } else {
               logger.warn(
                 `Session health check confirmed manual attention is needed: ` +
-                  `kind=${health.classification.kind}`
+                  `kind=${health.classification.kind} health=${summarizeSessionStatus(health.status)}`
               );
             }
           } catch (healthError) {
@@ -215,15 +245,40 @@ async function main() {
           logger.info("Session attention counter reset after successful health check");
         } else {
           consecutiveSessionAttentionFailures += 1;
+          const now = Date.now();
+          const recentGoodSeconds = secondsSince(lastKnownGoodSessionAt, now);
+          const deferSessionAttention = shouldDeferSessionAttention(error, config, lastKnownGoodSessionAt, now);
           const willStop =
             config.stopOnSessionAttention &&
-            consecutiveSessionAttentionFailures >= config.sessionAttentionMaxFailures;
+            consecutiveSessionAttentionFailures >= config.sessionAttentionMaxFailures &&
+            !deferSessionAttention;
 
-          logger.error(
-            `${error.message} consecutive_session_attention=${consecutiveSessionAttentionFailures}/${config.sessionAttentionMaxFailures}`
-          );
+          const sessionSummary = summarizeSessionStatus(confirmedHealthStatus || error.details);
+          const baseSessionLog =
+            `${error.message} consecutive_session_attention=${consecutiveSessionAttentionFailures}/` +
+            `${config.sessionAttentionMaxFailures} recent_good_session=${
+              recentGoodSeconds === null ? "none" : `${recentGoodSeconds}s`
+            } ${sessionSummary}`;
+
+          if (deferSessionAttention) {
+            nextDelayOverrideMs = Math.max(nextDelayOverrideMs, config.sessionFailureBackoffMs);
+            nextDelayReason = "session backoff";
+            logger.warn(
+              `${baseSessionLog}; treating as transient because a good scan happened within ` +
+                `${Math.round(config.sessionAttentionGraceMs / 1000)}s, backing off instead of stopping`
+            );
+          } else {
+            if (!willStop) {
+              nextDelayOverrideMs = Math.max(nextDelayOverrideMs, config.sessionFailureBackoffMs);
+              nextDelayReason = "session backoff";
+              logger.error(`${baseSessionLog}; backing off before retry`);
+            } else {
+              logger.error(baseSessionLog);
+            }
+          }
 
           if (
+            !deferSessionAttention &&
             config.notifyCriticalErrors &&
             (willStop || Date.now() - lastSessionAttentionNotificationAt > config.sessionAttentionCooldownMs)
           ) {
@@ -262,8 +317,12 @@ async function main() {
       break;
     }
 
-    const waitMs = nextScanDelayMs(config);
-    logger.info(`Next scan in ${Math.round(waitMs / 1000)}s${isPanicActive(config) ? " (panic mode)" : ""}`);
+    const waitMs = nextDelayOverrideMs > 0 ? nextDelayOverrideMs : nextScanDelayMs(config);
+    const waitReason =
+      nextDelayOverrideMs > 0 ? ` (${nextDelayReason})` : isPanicActive(config) ? " (panic mode)" : "";
+    nextDelayOverrideMs = 0;
+    nextDelayReason = "";
+    logger.info(`Next scan in ${Math.round(waitMs / 1000)}s${waitReason}`);
     await sleep(waitMs);
   } while (!shuttingDown);
 
@@ -282,5 +341,6 @@ if (require.main === module) {
 
 module.exports = {
   notificationTriggers,
-  runCycle
+  runCycle,
+  shouldDeferSessionAttention
 };

@@ -199,6 +199,8 @@ NOTIFY_CRITICAL_ERRORS=true
 SESSION_ATTENTION_MAX_FAILURES=2
 SESSION_ATTENTION_COOLDOWN_SECONDS=300
 VERIFY_SESSION_ATTENTION=true
+SESSION_ATTENTION_GRACE_SECONDS=300
+SESSION_FAILURE_BACKOFF_SECONDS=90
 STOP_ON_SESSION_ATTENTION=true
 ```
 
@@ -423,8 +425,10 @@ When Amazon asks for login, 2FA, CAPTCHA, or another manual check, the watcher t
 Default behavior:
 
 - confirm suspected login failures with a second Vine health-check page before counting them
-- notify Telegram immediately, then at most once every `SESSION_ATTENTION_COOLDOWN_SECONDS`
-- stop after `SESSION_ATTENTION_MAX_FAILURES` consecutive failures
+- treat confirmed login failures as transient when a good scan happened within `SESSION_ATTENTION_GRACE_SECONDS`
+- use `SESSION_FAILURE_BACKOFF_SECONDS` before retrying after a transient login failure
+- notify Telegram only when manual attention looks persistent, then at most once every `SESSION_ATTENTION_COOLDOWN_SECONDS`
+- stop after `SESSION_ATTENTION_MAX_FAILURES` consecutive persistent failures
 - exit cleanly so systemd does not restart it in a loop
 
 After you complete manual login, start the service again:

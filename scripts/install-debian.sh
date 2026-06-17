@@ -105,7 +105,7 @@ copy_project() {
 install_node_dependencies() {
   say "Installing npm dependencies"
   cd "$INSTALL_DIR"
-  runuser -u "$SERVICE_USER" -- npm install
+  runuser -u "$SERVICE_USER" -- npm install --loglevel=error
 }
 
 install_playwright() {
@@ -169,6 +169,9 @@ NOTIFY_CRITICAL_ERRORS=${notify_errors}
 CRITICAL_NOTIFICATION_COOLDOWN_SECONDS=900
 SESSION_ATTENTION_MAX_FAILURES=2
 SESSION_ATTENTION_COOLDOWN_SECONDS=300
+VERIFY_SESSION_ATTENTION=true
+SESSION_ATTENTION_GRACE_SECONDS=300
+SESSION_FAILURE_BACKOFF_SECONDS=90
 STOP_ON_SESSION_ATTENTION=true
 EOF
   chown "$SERVICE_USER:$SERVICE_USER" "$env_file"
