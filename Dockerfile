@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM node:22-bookworm-slim
+FROM node:26-bookworm-slim
 
 LABEL org.opencontainers.image.title="Vine Watcher"
 LABEL org.opencontainers.image.description="Local Amazon Vine watcher with Telegram notifications"
