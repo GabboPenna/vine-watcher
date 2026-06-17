@@ -1,5 +1,7 @@
 # Vine Watcher Telegram
 
+[![CI](https://github.com/GabboPenna/vine-watcher/actions/workflows/ci.yml/badge.svg)](https://github.com/GabboPenna/vine-watcher/actions/workflows/ci.yml)
+
 Local Amazon Vine monitor with Telegram notifications.
 
 Vine Watcher Telegram watches the Amazon Vine pages that are already available to your logged-in account and notifies you when a newly seen product looks interesting. It is a notification system, not an ordering bot.
@@ -292,10 +294,30 @@ npm run login:wait         # visible Chromium login, auto-close after 15 minutes
 npm run login:server       # waits for /tmp/vine-watcher-login/done
 npm run once               # one scan, then exit
 npm run start              # continuous loop
+npm run validate           # syntax, shell, core tests, and secret hygiene
+npm test                   # core unit tests
 npm run test:telegram      # send a Telegram test message
 npm run stats              # show SQLite stats
 npm run export:csv         # export seen products to CSV
 npm run panic:status       # show panic settings
+```
+
+## Quality Gates
+
+GitHub Actions runs the validation suite on every push to `main`, every pull request, and manual workflow dispatch.
+
+The CI checks:
+
+- clean dependency install with `npm ci`
+- JavaScript syntax with `node --check`
+- Bash syntax for install/login/panic scripts
+- core unit tests for scoring, value parsing, notification triggers, storage, and Telegram formatting
+- secret hygiene for tracked files, including Telegram tokens, private keys, Amazon cookies, runtime `.env` files, and SQLite data
+
+Run the same suite locally:
+
+```bash
+npm run validate
 ```
 
 ## Scoring

@@ -29,7 +29,7 @@ function formatEuro(value) {
   if (!Number.isFinite(parsed)) {
     return "n/a";
   }
-  return `€${parsed.toFixed(2)}`;
+  return `\u20ac${parsed.toFixed(2)}`;
 }
 
 function notificationTriggers(product, scoring, config) {
