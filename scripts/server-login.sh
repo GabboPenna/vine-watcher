@@ -7,7 +7,7 @@ RUN_DIR="${RUN_DIR:-/tmp/vine-watcher-login}"
 DISPLAY_ID="${DISPLAY_ID:-:99}"
 VNC_PORT="${VNC_PORT:-5901}"
 NOVNC_PORT="${NOVNC_PORT:-6080}"
-VNC_PASSWORD="${VNC_PASSWORD:-vine2026}"
+VNC_PASSWORD="${VNC_PASSWORD:-}"
 PASS_FILE="/var/lib/${SERVICE_USER}/vine-vnc.pass"
 DONE_FILE="${RUN_DIR}/done"
 
@@ -31,6 +31,23 @@ stop_processes() {
       rm -f "$pidfile"
     fi
   done
+  rm -f "$PASS_FILE"
+}
+
+create_vnc_password() {
+  if [ -n "$VNC_PASSWORD" ]; then
+    return
+  fi
+
+  if command -v openssl >/dev/null 2>&1; then
+    VNC_PASSWORD="$(openssl rand -hex 8)"
+  elif command -v python3 >/dev/null 2>&1; then
+    VNC_PASSWORD="$(
+      python3 -c 'import secrets, string; print("".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16)))'
+    )"
+  else
+    VNC_PASSWORD="$(date +%s%N | sha256sum | awk '{print substr($1, 1, 16)}')"
+  fi
 }
 
 install_packages() {
@@ -59,6 +76,7 @@ start_login() {
   chown "$SERVICE_USER:$SERVICE_USER" "$RUN_DIR"
   stop_processes
   rm -f "${RUN_DIR}"/*.log "$DONE_FILE"
+  create_vnc_password
 
   runuser -u "$SERVICE_USER" -- x11vnc -storepasswd "$VNC_PASSWORD" "$PASS_FILE" >/dev/null 2>&1
   chmod 600 "$PASS_FILE"

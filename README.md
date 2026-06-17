@@ -189,6 +189,8 @@ Open the printed noVNC URL, enter the printed password, and complete Amazon logi
 sudo /opt/vine-watcher-telegram/scripts/server-login.sh finish
 ```
 
+The noVNC password is generated for that temporary session and removed when you run `finish` or `stop`. You can override it with `VNC_PASSWORD=...` if you really need to, but do not commit real passwords.
+
 Stop the temporary session without saving:
 
 ```bash
