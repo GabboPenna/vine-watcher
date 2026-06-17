@@ -59,7 +59,7 @@ install_base_packages() {
   say "Installing Debian packages"
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    ca-certificates curl git sqlite3 nodejs npm build-essential python3
+    ca-certificates curl git sqlite3 nodejs npm build-essential python3 xvfb xauth
 }
 
 ensure_node() {

@@ -150,7 +150,7 @@ npm run docker:login:finish
 
 ```bash
 sudo apt update
-sudo apt install -y ca-certificates curl git sqlite3 nodejs npm build-essential python3
+sudo apt install -y ca-certificates curl git sqlite3 nodejs npm build-essential python3 xvfb xauth
 
 sudo useradd --system --create-home --home-dir /var/lib/vinewatcher --shell /usr/sbin/nologin vinewatcher
 sudo mkdir -p /opt/vine-watcher-telegram
@@ -341,6 +341,8 @@ journalctl -u vine-watcher.service -f
 ```
 
 The service uses `Restart=on-failure`. When Amazon requires login, CAPTCHA, or manual verification, the watcher can stop cleanly after repeated session-health failures instead of restarting forever.
+
+The packaged systemd service runs Chromium in headed mode inside Xvfb. This keeps the service fully headless from the server point of view, but avoids Amazon treating `chrome-headless-shell` differently from the browser profile used during manual login.
 
 Status:
 

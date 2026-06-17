@@ -6,12 +6,14 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/vine-watcher-telegram
-ExecStart=/usr/bin/npm run start
+ExecStart=/opt/vine-watcher-telegram/scripts/run-service.sh
 Restart=on-failure
 RestartSec=20
 User=vinewatcher
 Environment=NODE_ENV=production
 Environment=HOME=/var/lib/vinewatcher
+Environment=HEADLESS=false
+Environment=VINE_WATCHER_XVFB=true
 
 [Install]
 WantedBy=multi-user.target
