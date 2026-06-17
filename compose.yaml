@@ -2,7 +2,7 @@ name: vine-watcher
 
 services:
   watcher:
-    image: ${VINE_WATCHER_IMAGE:-gabbopenna/vine-watcher:latest}
+    image: ${VINE_WATCHER_IMAGE:-gabrielepennacchia/vine-watcher:latest}
     build:
       context: .
     restart: unless-stopped
@@ -21,7 +21,7 @@ services:
       - vine-data:/data
 
   login:
-    image: ${VINE_WATCHER_IMAGE:-gabbopenna/vine-watcher:latest}
+    image: ${VINE_WATCHER_IMAGE:-gabrielepennacchia/vine-watcher:latest}
     build:
       context: .
     profiles:
