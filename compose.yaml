@@ -13,8 +13,9 @@ services:
         required: false
     environment:
       NODE_ENV: production
-      HEADLESS: "true"
+      HEADLESS: "false"
       CHROMIUM_NO_SANDBOX: "true"
+      VINE_WATCHER_XVFB: "true"
       DATABASE_PATH: /data/vine-watcher.sqlite
       PLAYWRIGHT_USER_DATA_DIR: /data/chromium-profile
     volumes:

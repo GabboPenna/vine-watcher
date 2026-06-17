@@ -89,7 +89,7 @@ jobs:
             type=sha,prefix=sha-
             type=raw,value=latest
           labels: |
-            org.opencontainers.image.title=Vine Watcher Telegram
+            org.opencontainers.image.title=Vine Watcher
             org.opencontainers.image.description=Local Amazon Vine watcher with Telegram notifications
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
 

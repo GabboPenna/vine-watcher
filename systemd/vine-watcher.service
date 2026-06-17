@@ -1,5 +1,5 @@
 [Unit]
-Description=Vine Watcher Telegram
+Description=Vine Watcher
 After=network-online.target
 Wants=network-online.target
 

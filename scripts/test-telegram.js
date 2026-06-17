@@ -13,7 +13,7 @@ async function main() {
     throw new Error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be configured in .env");
   }
 
-  await telegram.sendText(`Vine Watcher Telegram test OK\n${new Date().toISOString()}`);
+  await telegram.sendText(`Vine Watcher test OK\n${new Date().toISOString()}`);
   logger.info("Telegram test message sent");
 }
 

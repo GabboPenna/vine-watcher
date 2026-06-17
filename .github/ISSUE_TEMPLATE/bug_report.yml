@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a reproducible problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not include Telegram tokens, Amazon account details, cookies, browser profile files, or private logs.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the shortest path that reproduces the issue.
+      placeholder: |
+        1. Configure ...
+        2. Run ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Paste only relevant logs after removing secrets and personal data.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "0.2.0"
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime
+      options:
+        - Debian/systemd
+        - Docker Compose
+        - Manual npm
+        - Other
+    validations:
+      required: true

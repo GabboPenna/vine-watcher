@@ -137,7 +137,7 @@ class TelegramClient {
 
   async sendCriticalError(error) {
     const message = [
-      "Vine Watcher Telegram needs attention",
+      "Vine Watcher needs attention",
       "",
       error && error.message ? error.message : String(error)
     ].join("\n");
@@ -149,7 +149,7 @@ class TelegramClient {
     const maxFailures = details.maxFailures || 1;
     const willStop = Boolean(details.willStop);
     return [
-      "Vine Watcher Telegram: Amazon login required",
+      "Vine Watcher: Amazon login required",
       "",
       error && error.message ? error.message : String(error),
       "",
