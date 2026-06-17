@@ -1,0 +1,366 @@
+"use strict";
+
+const {
+  canonicalizeAmazonUrl,
+  canonicalizeUrl,
+  extractAsinFromText,
+  normalizeTitle,
+  normalizeWhitespace,
+  sleep,
+  truncate,
+  uniqueProducts
+} = require("./utils");
+
+class SessionNeedsAttentionError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = "SessionNeedsAttentionError";
+    this.details = details;
+  }
+}
+
+class VineScanner {
+  constructor({ context, config, logger }) {
+    this.context = context;
+    this.config = config;
+    this.logger = logger;
+  }
+
+  async scanAllSections() {
+    const allProducts = [];
+    for (const section of this.config.sections) {
+      const products = await this.scanSection(section);
+      allProducts.push(...products);
+      if (this.config.sectionDelayMs > 0) {
+        await sleep(this.config.sectionDelayMs);
+      }
+    }
+    return uniqueProducts(allProducts);
+  }
+
+  async scanSection(section) {
+    const page = await this.context.newPage();
+    try {
+      this.logger.info(`Scanning "${section.name}"`);
+      const response = await page.goto(section.url, {
+        waitUntil: "domcontentloaded",
+        timeout: this.config.pageTimeoutMs
+      });
+
+      if (response && response.status() >= 500) {
+        this.logger.warn(`Amazon returned HTTP ${response.status()} for ${section.name}`);
+      }
+
+      await page
+        .waitForLoadState("networkidle", {
+          timeout: Math.min(this.config.pageTimeoutMs, 15000)
+        })
+        .catch(() => {
+          this.logger.debug(`Network did not become idle for "${section.name}"; continuing with DOM read`);
+        });
+
+      if (this.config.pageSettleMs > 0) {
+        await page.waitForTimeout(this.config.pageSettleMs);
+      }
+
+      await this.assertSessionReady(page, section);
+
+      const rawProducts = await page.evaluate(extractProductsFromPage, {
+        sectionName: section.name,
+        sectionUrl: section.url
+      });
+
+      const products = rawProducts
+        .map((product) => this.normalizeProduct(product, section))
+        .filter((product) => product.title && (product.asin || product.url));
+
+      const unique = uniqueProducts(products);
+      this.logger.info(`Section "${section.name}" scanned: ${unique.length} product candidates`);
+      return unique;
+    } catch (error) {
+      if (error instanceof SessionNeedsAttentionError) {
+        throw error;
+      }
+      this.logger.error(`Scanner error on "${section.name}": ${error.message}`);
+      throw error;
+    } finally {
+      await page.close().catch(() => {});
+    }
+  }
+
+  normalizeProduct(rawProduct, section) {
+    const rawText = normalizeWhitespace(rawProduct.raw_text || "");
+    const title = normalizeWhitespace(rawProduct.title || rawProduct.image_alt || "");
+    const url = canonicalizeAmazonUrl(rawProduct.url, section.url || this.config.amazonVineBaseUrl);
+    const asin =
+      normalizeWhitespace(rawProduct.asin || "") ||
+      extractAsinFromText([url, rawProduct.asin_source, rawText].filter(Boolean).join(" "));
+
+    return {
+      asin,
+      title,
+      normalized_title: normalizeTitle(title),
+      url,
+      image_url: canonicalizeUrl(rawProduct.image_url, section.url || this.config.amazonVineBaseUrl),
+      section: section.name,
+      section_url: section.url || this.config.amazonVineBaseUrl,
+      raw_text: truncate(rawText, 4000)
+    };
+  }
+
+  async assertSessionReady(page, section) {
+    const status = await page.evaluate(() => {
+      const text = (document.body && document.body.innerText ? document.body.innerText : "").slice(0, 6000);
+      const lower = text.toLowerCase();
+      const title = document.title || "";
+      const titleLower = title.toLowerCase();
+      const url = window.location.href;
+      const passwordInput = Boolean(document.querySelector('input[type="password"], input#ap_password'));
+      const captchaInput = Boolean(
+        document.querySelector(
+          'input[name*="captcha" i], input#captchacharacters, form[action*="validateCaptcha" i], img[src*="captcha" i]'
+        )
+      );
+      const captchaText =
+        lower.includes("captcha") ||
+        lower.includes("robot check") ||
+        lower.includes("inserisci i caratteri") ||
+        lower.includes("verifica che non sei un robot");
+      const signInText =
+        titleLower.includes("sign in") ||
+        titleLower.includes("accedi") ||
+        lower.includes("accedi al tuo account") ||
+        lower.includes("identificati") ||
+        url.includes("/ap/signin");
+
+      return {
+        url,
+        title,
+        passwordInput,
+        captchaInput,
+        captchaText,
+        signInText,
+        hasVineText: lower.includes("vine")
+      };
+    });
+
+    if (status.captchaInput || status.captchaText) {
+      throw new SessionNeedsAttentionError(
+        `Amazon requires a CAPTCHA or manual verification for "${section.name}". Run npm run login and complete it manually.`,
+        status
+      );
+    }
+
+    if (status.passwordInput || status.signInText) {
+      throw new SessionNeedsAttentionError(
+        `Amazon session is not valid or login is required for "${section.name}". Run npm run login.`,
+        status
+      );
+    }
+
+    if (!status.hasVineText) {
+      this.logger.warn(`The "${section.name}" page does not look like a Vine page; trying selectors anyway`);
+    }
+  }
+}
+
+function extractProductsFromPage(args) {
+  const productSelectors = [
+    '[id^="vvp-item-tile"]',
+    ".vvp-item-tile",
+    ".vvp-item-tile-content",
+    ".vvp-item-product-title",
+    ".vvp-item-product-image",
+    '[data-itemid]:not([data-itemid=""])'
+  ];
+
+  const cardSelector = [
+    '[id^="vvp-item-tile"]',
+    ".vvp-item-tile",
+    ".vvp-item-tile-content",
+    '[data-itemid]:not([data-itemid=""])'
+  ].join(",");
+
+  const titleSelectors = [
+    ".vvp-item-product-title",
+    ".a-truncate-full",
+    ".a-size-base-plus",
+    ".a-size-medium",
+    ".a-link-normal .a-text-normal",
+    'a[href*="/dp/"] span',
+    'a[href*="/gp/product/"] span',
+    'img[alt]'
+  ];
+
+  const ignoredLinePatterns = [
+    /richiedi prodotto/i,
+    /ordina/i,
+    /invia/i,
+    /mostra dettagli/i,
+    /vedi dettagli/i,
+    /seleziona/i,
+    /^la quantita e'? 1$/i,
+    /^la quantit\u00e0 \u00e8 1$/i,
+    /^\d+([,.]\d+)?\s*\u20ac/,
+    /^-?\d+%$/,
+    /^consigl\./i,
+    /^mediano:/i,
+    /^pagina \d+/i,
+    /^prime$/i,
+    /^amazon vine$/i
+  ];
+
+  function textOf(node) {
+    return String((node && (node.innerText || node.textContent)) || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function attr(node, name) {
+    return node && node.getAttribute ? node.getAttribute(name) || "" : "";
+  }
+
+  function absoluteUrl(value) {
+    if (!value) {
+      return "";
+    }
+    try {
+      return new URL(value, window.location.href).toString();
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function collectCards() {
+    const cards = new Set();
+    for (const selector of productSelectors) {
+      let nodes = [];
+      try {
+        nodes = Array.from(document.querySelectorAll(selector));
+      } catch (_error) {
+        nodes = [];
+      }
+
+      for (const node of nodes) {
+        const card = node.closest(cardSelector);
+        if (card) {
+          cards.add(card);
+        }
+      }
+    }
+    return Array.from(cards);
+  }
+
+  function pickTitle(card) {
+    for (const selector of titleSelectors) {
+      const node = card.querySelector(selector);
+      if (!node) {
+        continue;
+      }
+      const fromAlt = node.tagName === "IMG" ? attr(node, "alt") : "";
+      const value = (fromAlt || textOf(node)).trim();
+      if (isLikelyTitle(value)) {
+        return value;
+      }
+    }
+
+    const image = card.querySelector("img[alt]");
+    const imageAlt = attr(image, "alt");
+    if (isLikelyTitle(imageAlt)) {
+      return imageAlt;
+    }
+
+    const lines = String(card.innerText || card.textContent || "")
+      .split(/\n+/)
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(isLikelyTitle)
+      .sort((a, b) => b.length - a.length);
+
+    return lines[0] || "";
+  }
+
+  function isLikelyTitle(value) {
+    const text = String(value || "").trim();
+    if (text.length < 4 || text.length > 500) {
+      return false;
+    }
+    return !ignoredLinePatterns.some((pattern) => pattern.test(text));
+  }
+
+  function pickUrl(card) {
+    const anchors = Array.from(card.querySelectorAll('a[href*="/dp/"], a[href*="/gp/product/"]'));
+    for (const anchor of anchors) {
+      const href = attr(anchor, "href");
+      if (href && !href.includes("javascript:")) {
+        return absoluteUrl(href);
+      }
+    }
+    return "";
+  }
+
+  function pickImage(card) {
+    const image = card.querySelector("img[src], img[data-src]");
+    return absoluteUrl(attr(image, "src") || attr(image, "data-src"));
+  }
+
+  function pickAsin(card, url) {
+    const ownAttrs = [
+      attr(card, "data-asin"),
+      attr(card, "data-itemid"),
+      attr(card, "data-recommendation-asin"),
+      attr(card, "id"),
+      url
+    ];
+
+    const withAsin = card.querySelector("[data-asin], [data-itemid]");
+    if (withAsin) {
+      ownAttrs.push(attr(withAsin, "data-asin"), attr(withAsin, "data-itemid"), attr(withAsin, "id"));
+    }
+
+    const joined = ownAttrs.filter(Boolean).join(" ");
+    const patterns = [
+      /(?:\/dp\/|\/gp\/product\/)([A-Z0-9]{10})/i,
+      /(?:data-asin|asin|vvp-item-tile)[=/: -]*([A-Z0-9]{10})/i,
+      /\bB[0-9A-Z]{9}\b/i
+    ];
+    for (const pattern of patterns) {
+      const match = joined.match(pattern);
+      if (match) {
+        return (match[1] || match[0]).toUpperCase();
+      }
+    }
+    return "";
+  }
+
+  const products = [];
+  for (const card of collectCards()) {
+    const rawText = textOf(card);
+    const title = pickTitle(card);
+    const url = pickUrl(card);
+    const image = pickImage(card);
+    const asin = pickAsin(card, url);
+
+    if (!title && !asin && !url) {
+      continue;
+    }
+
+    products.push({
+      asin,
+      asin_source: [attr(card, "data-asin"), attr(card, "data-itemid"), attr(card, "id")].filter(Boolean).join(" "),
+      title,
+      url,
+      image_url: image,
+      image_alt: attr(card.querySelector("img[alt]"), "alt"),
+      section: args.sectionName,
+      section_url: args.sectionUrl,
+      raw_text: rawText
+    });
+  }
+
+  return products;
+}
+
+module.exports = {
+  SessionNeedsAttentionError,
+  VineScanner
+};
