@@ -1,6 +1,6 @@
 {
   "name": "vine-watcher-telegram",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local Amazon Vine watcher that sends Telegram notifications without requesting products.",
   "license": "MIT",
   "type": "commonjs",
