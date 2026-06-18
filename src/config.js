@@ -39,6 +39,8 @@ const keywordConfig = {
   ],
   positiveKeywordsNormal: [
     "wifi",
+    "thread",
+    "wireless",
     "smart",
     "bluetooth",
     "usb-c",
@@ -114,7 +116,18 @@ const keywordConfig = {
     "crucial",
     "kingston"
   ],
-  smartHomeKeywords: ["zigbee", "matter", "tuya", "wifi", "wi-fi", "sensore", "smart", "home assistant", "thread"],
+  smartHomeKeywords: [
+    "zigbee",
+    "matter",
+    "tuya",
+    "wifi",
+    "wi-fi",
+    "wireless",
+    "sensore",
+    "smart",
+    "home assistant",
+    "thread"
+  ],
   electronicsOrToolKeywords: [
     "elettronica",
     "alimentatore",

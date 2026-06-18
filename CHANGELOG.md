@@ -4,6 +4,12 @@ All notable changes to Vine Watcher are documented here.
 
 This project uses semantic versioning.
 
+## Unreleased
+
+### Changed
+
+- Added `thread` and `wireless` to the default positive smart-home scoring keywords.
+
 ## [0.2.0] - 2026-06-17
 
 ### Changed
