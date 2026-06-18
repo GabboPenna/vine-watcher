@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { loadConfig } = require("../src/config");
-const { notificationTriggers, shouldDeferSessionAttention } = require("../src/index");
+const { notificationTriggers, runCycle, shouldDeferSessionAttention } = require("../src/index");
 const { classifySessionStatus } = require("../src/scanner");
 const { scoreProduct } = require("../src/scorer");
 const { ProductStorage } = require("../src/storage");
@@ -306,7 +306,66 @@ function testSessionAttentionDeferral() {
   );
 }
 
-function main() {
+async function testRunCycleNotifiesAfterEachSection() {
+  const events = [];
+  const config = loadConfig({
+    sections: [
+      { name: "First", url: "https://www.amazon.it/vine/vine-items?queue=potluck" },
+      { name: "Second", url: "https://www.amazon.it/vine/vine-items?queue=encore" }
+    ],
+    notifyAllProducts: true,
+    maxNotificationsPerCycle: 5,
+    sectionDelayMs: 0
+  });
+  const product = {
+    id: 1,
+    asin: "B002KTID3A",
+    title: "Low score product",
+    section: "First",
+    section_url: "https://www.amazon.it/vine/vine-items?queue=potluck",
+    estimated_value_eur: null
+  };
+  const scanner = {
+    async scanSection(section) {
+      events.push(`scan:${section.name}`);
+      return section.name === "First" ? [product] : [];
+    }
+  };
+  const storage = {
+    saveProduct(savedProduct) {
+      events.push(`save:${savedProduct.title}`);
+      return {
+        isNew: true,
+        product: {
+          ...savedProduct,
+          id: 1,
+          notified: 0
+        }
+      };
+    },
+    markNotified(productId) {
+      events.push(`mark:${productId}`);
+    }
+  };
+  const telegram = {
+    async sendProduct(sentProduct) {
+      events.push(`notify:${sentProduct.id}`);
+      return true;
+    }
+  };
+
+  await runCycle({
+    scanner,
+    storage,
+    telegram,
+    config,
+    logger: silentLogger
+  });
+
+  assert.deepEqual(events, ["scan:First", "save:Low score product", "notify:1", "mark:1", "scan:Second"]);
+}
+
+async function main() {
   testEuroParsing();
   testUrlCanonicalization();
   testScoringAndTriggers();
@@ -314,7 +373,11 @@ function main() {
   testTelegramFormatting();
   testSessionStatusClassification();
   testSessionAttentionDeferral();
+  await testRunCycleNotifiesAfterEachSection();
   console.log("Core tests OK");
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

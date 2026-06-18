@@ -72,6 +72,24 @@ PANIC_SCAN_INTERVAL_SECONDS=10
 PANIC_SCAN_JITTER_SECONDS=3
 ```
 
+Fast personal instance profile:
+
+```bash
+PANIC_MODE=true
+PANIC_SCAN_INTERVAL_SECONDS=5
+PANIC_SCAN_JITTER_SECONDS=0
+SCAN_INTERVAL_SECONDS=10
+SCAN_JITTER_SECONDS=0
+PAGE_TIMEOUT_SECONDS=18
+PRODUCT_READY_TIMEOUT_SECONDS=2
+PAGE_SETTLE_SECONDS=0
+SECTION_DELAY_SECONDS=0
+WAIT_FOR_NETWORK_IDLE=false
+BLOCK_RESOURCE_TYPES=image,font,media
+```
+
+This profile scans much more often and blocks product images for speed. It is useful for a private instance you actively watch, but the default profile is more conservative.
+
 ## Notifications
 
 ```bash

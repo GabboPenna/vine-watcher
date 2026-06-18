@@ -96,61 +96,70 @@ function notificationTriggers(product, scoring, config) {
 
 async function runCycle({ scanner, storage, telegram, config, logger }) {
   const startedAt = Date.now();
-  const products = await scanner.scanAllSections();
+  let scanned = 0;
   let newProducts = 0;
   let notified = 0;
   let maxScore = null;
 
-  for (const product of products) {
-    const scoring = scoreProduct(product, config.keywords);
-    if (maxScore === null || scoring.score > maxScore) {
-      maxScore = scoring.score;
-    }
+  for (const section of config.sections) {
+    const products = await scanner.scanSection(section);
+    scanned += products.length;
 
-    const saved = storage.saveProduct(product, scoring);
-    if (saved.isNew) {
-      newProducts += 1;
-      logger.info(
-        `New product score=${scoring.score} value=${formatEuro(product.estimated_value_eur)} ` +
-          `section="${product.section}" title="${product.title}"`
-      );
-    }
+    for (const product of products) {
+      const scoring = scoreProduct(product, config.keywords);
+      if (maxScore === null || scoring.score > maxScore) {
+        maxScore = scoring.score;
+      }
 
-    const triggers = notificationTriggers(saved.product, scoring, config);
-    const shouldNotify = saved.product.notified !== 1 && triggers.length > 0;
-    if (!shouldNotify) {
-      continue;
-    }
-
-    if (notified >= config.maxNotificationsPerCycle) {
-      logger.warn(
-        `Notification limit reached; not notifying score=${scoring.score} ` +
-          `value=${formatEuro(saved.product.estimated_value_eur)} title="${product.title}"`
-      );
-      continue;
-    }
-
-    try {
-      const sent = await telegram.sendProduct(saved.product, {
-        ...scoring,
-        notificationTriggers: triggers
-      });
-      if (sent) {
-        storage.markNotified(saved.product.id);
-        notified += 1;
+      const saved = storage.saveProduct(product, scoring);
+      if (saved.isNew) {
+        newProducts += 1;
         logger.info(
-          `Telegram notification sent for product id=${saved.product.id} score=${scoring.score} ` +
-            `value=${formatEuro(saved.product.estimated_value_eur)} triggers="${triggers.join("; ")}"`
+          `New product score=${scoring.score} value=${formatEuro(product.estimated_value_eur)} ` +
+            `section="${product.section}" title="${product.title}"`
         );
       }
-    } catch (error) {
-      logger.error(`Telegram notification failed for product id=${saved.product.id}: ${error.message}`);
+
+      const triggers = notificationTriggers(saved.product, scoring, config);
+      const shouldNotify = saved.product.notified !== 1 && triggers.length > 0;
+      if (!shouldNotify) {
+        continue;
+      }
+
+      if (notified >= config.maxNotificationsPerCycle) {
+        logger.warn(
+          `Notification limit reached; not notifying score=${scoring.score} ` +
+            `value=${formatEuro(saved.product.estimated_value_eur)} title="${product.title}"`
+        );
+        continue;
+      }
+
+      try {
+        const sent = await telegram.sendProduct(saved.product, {
+          ...scoring,
+          notificationTriggers: triggers
+        });
+        if (sent) {
+          storage.markNotified(saved.product.id);
+          notified += 1;
+          logger.info(
+            `Telegram notification sent for product id=${saved.product.id} score=${scoring.score} ` +
+              `value=${formatEuro(saved.product.estimated_value_eur)} triggers="${triggers.join("; ")}"`
+          );
+        }
+      } catch (error) {
+        logger.error(`Telegram notification failed for product id=${saved.product.id}: ${error.message}`);
+      }
+    }
+
+    if (config.sectionDelayMs > 0) {
+      await sleep(config.sectionDelayMs);
     }
   }
 
   const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
   logger.info(
-    `Cycle complete: scanned=${products.length} new=${newProducts} notified=${notified} max_score=${
+    `Cycle complete: scanned=${scanned} new=${newProducts} notified=${notified} max_score=${
       maxScore === null ? "n/d" : maxScore
     } elapsed=${elapsedSeconds}s`
   );

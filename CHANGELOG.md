@@ -10,6 +10,7 @@ This project uses semantic versioning.
 
 - Added `thread` and `wireless` to the default positive smart-home scoring keywords.
 - Expanded default scoring for smart-home, Home Assistant, energy monitoring, network/camera gear, household appliances, and useful appliance accessories, including Italian and English terms.
+- Products are now processed and notified immediately after each section scan, instead of waiting for all sections to finish.
 
 ### Added
 
