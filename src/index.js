@@ -56,6 +56,12 @@ function formatEuro(value) {
 
 function notificationTriggers(product, scoring, config) {
   const triggers = [];
+
+  if (config.notifyAllProducts) {
+    triggers.push("notify all products mode");
+    return triggers;
+  }
+
   const estimatedValue =
     product.estimated_value_eur === null ||
     product.estimated_value_eur === undefined ||

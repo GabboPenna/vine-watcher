@@ -67,6 +67,15 @@ function testScoringAndTriggers() {
     ["estimated value \u20ac40.00 >= \u20ac35.00"]
   );
 
+  assert.deepEqual(
+    notificationTriggers(
+      { estimated_value_eur: null },
+      { score: -50, positiveSignals: 0, negativeSignals: 5 },
+      { ...config, notifyAllProducts: true }
+    ),
+    ["notify all products mode"]
+  );
+
   assert.equal(
     notificationTriggers(
       { estimated_value_eur: null },

@@ -75,6 +75,7 @@ PANIC_SCAN_JITTER_SECONDS=3
 ## Notifications
 
 ```bash
+NOTIFY_ALL_PRODUCTS=false
 MIN_SCORE_TO_NOTIFY=20
 MIN_VALUE_TO_NOTIFY_EUR=50
 STRICT_NOTIFY_MODE=true
@@ -82,6 +83,8 @@ STRICT_MIN_POSITIVE_SIGNALS=2
 STRICT_MAX_NEGATIVE_SIGNALS=0
 MAX_NOTIFICATIONS_PER_CYCLE=5
 ```
+
+Set `NOTIFY_ALL_PRODUCTS=true` to notify every unnotified product the watcher sees, regardless of score, strict filters, or estimated value. This still respects `MAX_NOTIFICATIONS_PER_CYCLE` to avoid Telegram floods.
 
 The value override bypasses strict score filtering. If a product has a visible estimated value greater than or equal to `MIN_VALUE_TO_NOTIFY_EUR`, it is notified.
 
