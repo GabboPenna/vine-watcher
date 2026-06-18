@@ -75,6 +75,64 @@ function testScoringAndTriggers() {
     ).length,
     0
   );
+
+  const smartHomeScored = scoreProduct(
+    {
+      title: "Sensore presenza mmwave Zigbee2MQTT per Home Assistant",
+      raw_text: "",
+      section: "Additional items"
+    },
+    config.keywords
+  );
+  assert.ok(smartHomeScored.score >= 20);
+  assert.ok(smartHomeScored.positiveSignals >= 2);
+  assert.ok(smartHomeScored.reasons.includes("bonus: smart home"));
+
+  const applianceScored = scoreProduct(
+    {
+      title: "Filtro HEPA aspirapolvere lavabile",
+      raw_text: "",
+      section: "Additional items"
+    },
+    config.keywords
+  );
+  assert.ok(applianceScored.score >= 20);
+  assert.ok(applianceScored.positiveSignals >= 2);
+  assert.ok(applianceScored.reasons.includes("bonus: home appliance or household"));
+
+  const englishSmartHomeScored = scoreProduct(
+    {
+      title: "Matter Thread smart plug with power meter for Home Assistant",
+      raw_text: "",
+      section: "Additional items"
+    },
+    config.keywords
+  );
+  assert.ok(englishSmartHomeScored.score >= 20);
+  assert.ok(englishSmartHomeScored.positiveSignals >= 2);
+  assert.ok(englishSmartHomeScored.reasons.includes("bonus: smart home"));
+
+  const englishApplianceScored = scoreProduct(
+    {
+      title: "HEPA filter replacement kit for robot vacuum cleaner",
+      raw_text: "",
+      section: "Additional items"
+    },
+    config.keywords
+  );
+  assert.ok(englishApplianceScored.score >= 20);
+  assert.ok(englishApplianceScored.positiveSignals >= 2);
+  assert.ok(englishApplianceScored.reasons.includes("bonus: home appliance or household"));
+
+  const genericDinEnclosureScored = scoreProduct(
+    {
+      title: "DIN Rail Enclosure scatola elettrica per elettronica domotica",
+      raw_text: "",
+      section: "Additional items"
+    },
+    config.keywords
+  );
+  assert.ok(genericDinEnclosureScored.score < 20);
 }
 
 function testStorageEstimatedValue() {

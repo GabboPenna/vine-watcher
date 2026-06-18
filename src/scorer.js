@@ -89,6 +89,12 @@ function scoreProduct(product, keywordConfig) {
     reasons.push("bonus: electronics or tool");
   }
 
+  if (containsAny(text, keywordConfig.homeApplianceKeywords || [])) {
+    score += 5;
+    positiveSignals += 1;
+    reasons.push("bonus: home appliance or household");
+  }
+
   if (containsAny(text, keywordConfig.genericAccessoryKeywords)) {
     score -= 5;
     negativeSignals += 1;
