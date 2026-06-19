@@ -682,6 +682,7 @@ function loadConfig(overrides = {}) {
     panicScanIntervalSeconds: parseNumber(readEnv("PANIC_SCAN_INTERVAL_SECONDS", "10"), 10, 5),
     panicScanJitterSeconds: parseNumber(readEnv("PANIC_SCAN_JITTER_SECONDS", "3"), 3, 0),
     notifyAllProducts: parseBool(readEnv("NOTIFY_ALL_PRODUCTS", "false"), false),
+    notifyAllProductsWindow: readEnv("NOTIFY_ALL_PRODUCTS_WINDOW", "").trim(),
     minScoreToNotify: parseNumber(readEnv("MIN_SCORE_TO_NOTIFY", "20"), 20),
     minValueToNotifyEur: parseNumber(readEnv("MIN_VALUE_TO_NOTIFY_EUR", "50"), 50, 0),
     strictNotifyMode: parseBool(readEnv("STRICT_NOTIFY_MODE", "true"), true),

@@ -15,6 +15,7 @@ This project uses semantic versioning.
 ### Added
 
 - Added `NOTIFY_ALL_PRODUCTS=true` to notify every unnotified product regardless of score filters.
+- Added `NOTIFY_ALL_PRODUCTS_WINDOW=HH:MM-HH:MM` to schedule notify-all mode during a local daily time window.
 
 ## [0.2.0] - 2026-06-17
 

@@ -94,6 +94,7 @@ This profile scans much more often and blocks product images for speed. It is us
 
 ```bash
 NOTIFY_ALL_PRODUCTS=false
+NOTIFY_ALL_PRODUCTS_WINDOW=
 MIN_SCORE_TO_NOTIFY=20
 MIN_VALUE_TO_NOTIFY_EUR=50
 STRICT_NOTIFY_MODE=true
@@ -103,6 +104,8 @@ MAX_NOTIFICATIONS_PER_CYCLE=5
 ```
 
 Set `NOTIFY_ALL_PRODUCTS=true` to notify every unnotified product the watcher sees, regardless of score, strict filters, or estimated value. This still respects `MAX_NOTIFICATIONS_PER_CYCLE` to avoid Telegram floods.
+
+Set `NOTIFY_ALL_PRODUCTS_WINDOW=09:00-22:30` to enable notify-all only during a local daily time window. The configured `TZ` value is used, defaults to `Europe/Rome`, and the end time is exclusive. Overnight windows such as `22:00-06:00` are supported.
 
 The value override bypasses strict score filtering. If a product has a visible estimated value greater than or equal to `MIN_VALUE_TO_NOTIFY_EUR`, it is notified.
 

@@ -6,7 +6,13 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { loadConfig } = require("../src/config");
-const { notificationTriggers, runCycle, shouldDeferSessionAttention } = require("../src/index");
+const {
+  isNotifyAllProductsActive,
+  isTimeWindowActive,
+  notificationTriggers,
+  runCycle,
+  shouldDeferSessionAttention
+} = require("../src/index");
 const { classifySessionStatus } = require("../src/scanner");
 const { scoreProduct } = require("../src/scorer");
 const { ProductStorage } = require("../src/storage");
@@ -76,6 +82,26 @@ function testScoringAndTriggers() {
     ["notify all products mode"]
   );
 
+  assert.deepEqual(
+    notificationTriggers(
+      { estimated_value_eur: null },
+      { score: -50, positiveSignals: 0, negativeSignals: 5 },
+      { ...config, notifyAllProductsWindow: "09:00-22:30", timezoneId: "Europe/Rome" },
+      Date.parse("2026-06-19T07:00:00Z")
+    ),
+    ["notify all products window 09:00-22:30"]
+  );
+
+  assert.equal(
+    notificationTriggers(
+      { estimated_value_eur: null },
+      { score: -50, positiveSignals: 0, negativeSignals: 5 },
+      { ...config, notifyAllProductsWindow: "09:00-22:30", timezoneId: "Europe/Rome" },
+      Date.parse("2026-06-19T20:30:00Z")
+    ).length,
+    0
+  );
+
   assert.equal(
     notificationTriggers(
       { estimated_value_eur: null },
@@ -142,6 +168,29 @@ function testScoringAndTriggers() {
     config.keywords
   );
   assert.ok(genericDinEnclosureScored.score < 20);
+}
+
+function testNotifyAllProductWindow() {
+  assert.equal(isTimeWindowActive("09:00-22:30", "Europe/Rome", Date.parse("2026-06-19T06:59:00Z")), false);
+  assert.equal(isTimeWindowActive("09:00-22:30", "Europe/Rome", Date.parse("2026-06-19T07:00:00Z")), true);
+  assert.equal(isTimeWindowActive("09:00-22:30", "Europe/Rome", Date.parse("2026-06-19T20:29:00Z")), true);
+  assert.equal(isTimeWindowActive("09:00-22:30", "Europe/Rome", Date.parse("2026-06-19T20:30:00Z")), false);
+  assert.equal(isTimeWindowActive("22:00-06:00", "Europe/Rome", Date.parse("2026-06-19T21:00:00Z")), true);
+  assert.equal(isTimeWindowActive("22:00-06:00", "Europe/Rome", Date.parse("2026-06-19T03:59:00Z")), true);
+  assert.equal(isTimeWindowActive("22:00-06:00", "Europe/Rome", Date.parse("2026-06-19T12:00:00Z")), false);
+  assert.equal(isTimeWindowActive("bad", "Europe/Rome", Date.parse("2026-06-19T12:00:00Z")), false);
+
+  assert.equal(
+    isNotifyAllProductsActive(
+      {
+        notifyAllProducts: false,
+        notifyAllProductsWindow: "09:00-22:30",
+        timezoneId: "Europe/Rome"
+      },
+      Date.parse("2026-06-19T07:00:00Z")
+    ),
+    true
+  );
 }
 
 function testStorageEstimatedValue() {
@@ -369,6 +418,7 @@ async function main() {
   testEuroParsing();
   testUrlCanonicalization();
   testScoringAndTriggers();
+  testNotifyAllProductWindow();
   testStorageEstimatedValue();
   testTelegramFormatting();
   testSessionStatusClassification();
