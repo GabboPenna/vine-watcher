@@ -365,7 +365,7 @@ async function testTelegramControlCommands() {
   assert.match(menu.text, /Control Panel/);
   assert.ok(menu.options.reply_markup.inline_keyboard.length > 0);
   assert.match(await control.executeCommand("/help"), /Vine Watcher Control/);
-  assert.match(await control.executeCommand("/status"), /Ultimo ciclo/);
+  assert.match(await control.executeCommand("/status"), /Ultimo giro/);
 
   assert.match(await control.executeCommand("/lang en"), /Language set/);
   assert.equal(settings.control_language, "en");

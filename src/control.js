@@ -118,14 +118,14 @@ function setMany(storage, values) {
 
 function boolText(value, language) {
   if (language === "it") {
-    return value ? "attivo" : "spento";
+    return value ? "✅ attivo" : "⏸️ spento";
   }
-  return value ? "on" : "off";
+  return value ? "✅ on" : "⏸️ off";
 }
 
 function formatEuro(value) {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? `EUR ${parsed.toFixed(2)}` : "n/a";
+  return Number.isFinite(parsed) ? `€${parsed.toFixed(2)}` : "n/a";
 }
 
 function isPanicActive(config, nowMs = Date.now()) {
@@ -141,6 +141,36 @@ function notifyAllActive(config, nowMs = Date.now()) {
 
 function seconds(valueMs) {
   return `${Math.round(Number(valueMs || 0) / 1000)}s`;
+}
+
+function formatWindow(value, language) {
+  return value || (language === "it" ? "nessuna" : "none");
+}
+
+function formatLastCycle(lastCycle, language) {
+  if (!lastCycle) {
+    return language === "it"
+      ? ["🕒 Ultimo ciclo: non ancora disponibile"]
+      : ["🕒 Last cycle: not available yet"];
+  }
+
+  return language === "it"
+    ? [
+        "🕒 Ultimo giro:",
+        `• visti: ${lastCycle.scanned}`,
+        `• nuovi: ${lastCycle.newProducts}`,
+        `• notificati: ${lastCycle.notified}`,
+        `• score massimo: ${lastCycle.maxScore}`,
+        `• durata: ${lastCycle.elapsedSeconds}s`
+      ]
+    : [
+        "🕒 Last sweep:",
+        `• scanned: ${lastCycle.scanned}`,
+        `• new: ${lastCycle.newProducts}`,
+        `• notified: ${lastCycle.notified}`,
+        `• max score: ${lastCycle.maxScore}`,
+        `• duration: ${lastCycle.elapsedSeconds}s`
+      ];
 }
 
 function controlCommands(language) {
@@ -180,16 +210,17 @@ function controlCommands(language) {
 function helpMessage(language) {
   if (language === "it") {
     return [
-      "Vine Watcher Control",
+      "✨ Vine Watcher Control",
+      "Ti ascolto da qui: puoi chiedermi lo stato, cambiare soglie e aprire il pannello rapido.",
       "",
-      "Comandi principali:",
-      "/menu - pannello con pulsanti rapidi",
-      "/status - stato live, ultimo ciclo e modalita attive",
-      "/config - configurazione efficace corrente",
-      "/help - questo help",
-      "/lang it|en - cambia lingua del bot",
+      "📌 Comandi principali:",
+      "/menu - apre il pannello con pulsanti rapidi",
+      "/status - ti dico come sto lavorando ora",
+      "/config - mostra la configurazione efficace",
+      "/help - mostra questa guida",
+      "/lang it|en - cambia lingua",
       "",
-      "Notifiche:",
+      "🔔 Notifiche:",
       "/notify_all on|off - segnala tutto sempre",
       "/notify_all_window 09:00-22:30 - segnala tutto solo in fascia oraria",
       "/notify_all_window off - disattiva la fascia notify-all",
@@ -199,18 +230,18 @@ function helpMessage(language) {
       "/strict_signals 2 0 - min positivi e max negativi",
       "/max_notifications 10 - limite notifiche per ciclo",
       "",
-      "Velocita:",
+      "⚡ Velocita:",
       "/panic on|off - panic mode permanente on/off",
       "/panic 30 - panic mode per 30 minuti",
       "/panic_interval 5 0 - intervallo panic e jitter",
       "/scan_interval 30 10 - intervallo normale e jitter",
       "/fast on|off - profilo veloce o conservativo",
       "",
-      "Manutenzione:",
+      "🧹 Manutenzione:",
       "/reset key - rimuove un override runtime",
       "/reset all - rimuove tutti gli override runtime",
       "",
-      "Esempi:",
+      "💡 Esempi:",
       "/notify_all_window 09:00-22:30",
       "/min_score 20",
       "/strict on",
@@ -219,16 +250,17 @@ function helpMessage(language) {
   }
 
   return [
-    "Vine Watcher Control",
+    "✨ Vine Watcher Control",
+    "I am listening here: ask for status, tune thresholds, or open the quick panel.",
     "",
-    "Core commands:",
-    "/menu - button control panel",
-    "/status - live status, last cycle, active modes",
-    "/config - current effective configuration",
-    "/help - this help",
-    "/lang it|en - change bot language",
+    "📌 Core commands:",
+    "/menu - open the button control panel",
+    "/status - show how I am working right now",
+    "/config - show the effective configuration",
+    "/help - show this guide",
+    "/lang it|en - change language",
     "",
-    "Notifications:",
+    "🔔 Notifications:",
     "/notify_all on|off - notify every product all the time",
     "/notify_all_window 09:00-22:30 - notify every product only during a daily window",
     "/notify_all_window off - disable the notify-all window",
@@ -238,18 +270,18 @@ function helpMessage(language) {
     "/strict_signals 2 0 - min positive and max negative signals",
     "/max_notifications 10 - notification limit per cycle",
     "",
-    "Speed:",
+    "⚡ Speed:",
     "/panic on|off - permanent panic mode on/off",
     "/panic 30 - panic mode for 30 minutes",
     "/panic_interval 5 0 - panic interval and jitter",
     "/scan_interval 30 10 - normal interval and jitter",
     "/fast on|off - fast or conservative profile",
     "",
-    "Maintenance:",
+    "🧹 Maintenance:",
     "/reset key - remove one runtime override",
     "/reset all - remove all runtime overrides",
     "",
-    "Examples:",
+    "💡 Examples:",
     "/notify_all_window 09:00-22:30",
     "/min_score 20",
     "/strict on",
@@ -393,7 +425,7 @@ class TelegramControl {
     const language = this.language();
     let text = "";
     let options = {};
-    let toast = language === "it" ? "Fatto" : "Done";
+    let toast = language === "it" ? "✅ Fatto" : "✅ Done";
 
     if (data === "vw:menu") {
       ({ text, options } = this.menuResponse(language));
@@ -420,9 +452,11 @@ class TelegramControl {
       const response = this.menuResponse(nextLanguage, typeof result === "string" ? result : "");
       text = response.text;
       options = response.options;
-      toast = nextLanguage === "it" ? "Aggiornato" : "Updated";
+      toast = nextLanguage === "it" ? "✅ Aggiornato" : "✅ Updated";
     } else {
-      text = language === "it" ? "Azione non riconosciuta. Usa /menu." : "Unknown action. Use /menu.";
+      text = language === "it"
+        ? "🤔 Questa azione non la riconosco ancora. Torna al menu e riproviamo."
+        : "🤔 I do not recognize this action yet. Go back to the menu and try again.";
       options = {
         reply_markup: this.backKeyboard(language)
       };
@@ -527,8 +561,8 @@ class TelegramControl {
     }
 
     return language === "it"
-      ? `Comando non riconosciuto: ${command}\nUsa /help.`
-      : `Unknown command: ${command}\nUse /help.`;
+      ? `🤔 Non conosco ancora questo comando: ${command}\nProva /menu oppure /help.`
+      : `🤔 I do not know this command yet: ${command}\nTry /menu or /help.`;
   }
 
   menuResponse(language, actionResult = "") {
@@ -544,40 +578,40 @@ class TelegramControl {
     const labels =
       language === "it"
         ? {
-            status: "Status",
-            config: "Config",
-            refresh: "Aggiorna",
-            fastOn: "Fast ON",
-            fastOff: "Fast OFF",
-            notifyOn: "Notify all ON",
-            notifyOff: "Notify all OFF",
-            panic30: "Panic 30m",
-            panicOff: "Panic OFF",
-            score5: "Score 5",
-            value35: "Valore 35",
-            strictOn: "Strict ON",
-            strictOff: "Strict OFF",
-            italian: "Italiano",
-            english: "English",
-            help: "Help"
+            status: "📊 Status",
+            config: "⚙️ Config",
+            refresh: "🔄 Aggiorna",
+            fastOn: "⚡ Fast ON",
+            fastOff: "🧘 Fast OFF",
+            notifyOn: "🔔 Tutto ON",
+            notifyOff: "🔕 Tutto OFF",
+            panic30: "🚀 Panic 30m",
+            panicOff: "🛬 Panic OFF",
+            score5: "🎯 Score 5",
+            value35: "💶 Valore 35",
+            strictOn: "🧪 Strict ON",
+            strictOff: "🌤️ Strict OFF",
+            italian: "🇮🇹 Italiano",
+            english: "🇬🇧 English",
+            help: "❔ Help"
           }
         : {
-            status: "Status",
-            config: "Config",
-            refresh: "Refresh",
-            fastOn: "Fast ON",
-            fastOff: "Fast OFF",
-            notifyOn: "Notify all ON",
-            notifyOff: "Notify all OFF",
-            panic30: "Panic 30m",
-            panicOff: "Panic OFF",
-            score5: "Score 5",
-            value35: "Value 35",
-            strictOn: "Strict ON",
-            strictOff: "Strict OFF",
-            italian: "Italiano",
-            english: "English",
-            help: "Help"
+            status: "📊 Status",
+            config: "⚙️ Config",
+            refresh: "🔄 Refresh",
+            fastOn: "⚡ Fast ON",
+            fastOff: "🧘 Fast OFF",
+            notifyOn: "🔔 All ON",
+            notifyOff: "🔕 All OFF",
+            panic30: "🚀 Panic 30m",
+            panicOff: "🛬 Panic OFF",
+            score5: "🎯 Score 5",
+            value35: "💶 Value 35",
+            strictOn: "🧪 Strict ON",
+            strictOff: "🌤️ Strict OFF",
+            italian: "🇮🇹 Italiano",
+            english: "🇬🇧 English",
+            help: "❔ Help"
           };
 
     return {
@@ -621,7 +655,7 @@ class TelegramControl {
       inline_keyboard: [
         [
           {
-            text: language === "it" ? "Torna al menu" : "Back to menu",
+            text: language === "it" ? "⬅️ Torna al menu" : "⬅️ Back to menu",
             callback_data: "vw:menu"
           }
         ]
@@ -632,19 +666,19 @@ class TelegramControl {
   async commandLanguage(args, language) {
     const nextLanguage = normalizeLanguage(args[0], "");
     if (!nextLanguage) {
-      return language === "it" ? "Uso: /lang it|en" : "Usage: /lang it|en";
+      return language === "it" ? "🗣️ Dimmi la lingua: /lang it oppure /lang en" : "🗣️ Tell me the language: /lang it or /lang en";
     }
     this.storage.setSetting("control_language", nextLanguage);
     await this.registerCommands(nextLanguage).catch((error) => {
       this.logger.warn(`Telegram command menu update failed: ${error.message}`);
     });
-    return nextLanguage === "it" ? "Lingua impostata: italiano." : "Language set: English.";
+    return nextLanguage === "it" ? "✅ Lingua impostata: italiano." : "✅ Language set: English.";
   }
 
   commandBoolean(key, args, language) {
     const value = parseOnOff(args[0]);
     if (value === null) {
-      return language === "it" ? "Uso: on oppure off." : "Usage: on or off.";
+      return language === "it" ? "🙂 Mi serve on oppure off." : "🙂 I need on or off.";
     }
     this.storage.setSetting(key, value ? "true" : "false");
     return this.ok(language, `${key}=${value ? "true" : "false"}`);
@@ -658,8 +692,8 @@ class TelegramControl {
     const value = String(args[0] || "").trim();
     if (!value) {
       return language === "it"
-        ? "Uso: /notify_all_window 09:00-22:30 oppure /notify_all_window off"
-        : "Usage: /notify_all_window 09:00-22:30 or /notify_all_window off";
+        ? "🕘 Scrivimi una fascia tipo /notify_all_window 09:00-22:30, oppure off."
+        : "🕘 Send a window like /notify_all_window 09:00-22:30, or off.";
     }
     if (value.toLowerCase() === "off") {
       this.storage.setSetting("notify_all_products_window", "");
@@ -668,8 +702,8 @@ class TelegramControl {
     const window = parseTimeWindow(value);
     if (!window) {
       return language === "it"
-        ? "Formato non valido. Usa HH:MM-HH:MM, esempio 09:00-22:30."
-        : "Invalid format. Use HH:MM-HH:MM, for example 09:00-22:30.";
+        ? "🕘 Formato non valido. Usa HH:MM-HH:MM, per esempio 09:00-22:30."
+        : "🕘 Invalid format. Use HH:MM-HH:MM, for example 09:00-22:30.";
     }
     this.storage.setSetting("notify_all_products_window", window.label);
     return this.ok(language, `notify_all_products_window=${window.label}`);
@@ -678,7 +712,7 @@ class TelegramControl {
   commandNumber(key, args, language, options = {}) {
     const value = parseNumberArg(args[0], options);
     if (value === null) {
-      return language === "it" ? "Numero non valido." : "Invalid number.";
+      return language === "it" ? "🔢 Questo numero non mi torna. Riprova con un valore valido." : "🔢 That number does not look right. Try a valid value.";
     }
     this.storage.setSetting(key, String(value));
     return this.ok(language, `${key}=${value}`);
@@ -689,8 +723,8 @@ class TelegramControl {
     const negative = parseNumberArg(args[1] === undefined ? "0" : args[1], { min: 0, integer: true });
     if (positive === null || negative === null) {
       return language === "it"
-        ? "Uso: /strict_signals 2 0"
-        : "Usage: /strict_signals 2 0";
+        ? "🧪 Uso: /strict_signals 2 0"
+        : "🧪 Usage: /strict_signals 2 0";
     }
     this.storage.setSetting("strict_min_positive_signals", String(positive));
     this.storage.setSetting("strict_max_negative_signals", String(negative));
@@ -700,7 +734,7 @@ class TelegramControl {
   commandPanic(args, language) {
     const value = String(args[0] || "").trim().toLowerCase();
     if (!value) {
-      return language === "it" ? "Uso: /panic on|off|30" : "Usage: /panic on|off|30";
+      return language === "it" ? "🚀 Uso: /panic on, /panic off oppure /panic 30" : "🚀 Usage: /panic on, /panic off, or /panic 30";
     }
 
     const enabled = parseOnOff(value);
@@ -712,7 +746,7 @@ class TelegramControl {
 
     const minutes = parseNumberArg(value, { min: 1, max: 1440, integer: true });
     if (minutes === null) {
-      return language === "it" ? "Uso: /panic on|off|30" : "Usage: /panic on|off|30";
+      return language === "it" ? "🚀 Uso: /panic on, /panic off oppure /panic 30" : "🚀 Usage: /panic on, /panic off, or /panic 30";
     }
 
     const until = Date.now() + minutes * 60 * 1000;
@@ -726,8 +760,8 @@ class TelegramControl {
     const jitter = parseNumberArg(args[1] === undefined ? "0" : args[1], { min: 0, integer: true });
     if (base === null || jitter === null) {
       return language === "it"
-        ? `Uso: /${baseKey.startsWith("panic") ? "panic_interval" : "scan_interval"} ${minBase} 0`
-        : `Usage: /${baseKey.startsWith("panic") ? "panic_interval" : "scan_interval"} ${minBase} 0`;
+        ? `⏱️ Uso: /${baseKey.startsWith("panic") ? "panic_interval" : "scan_interval"} ${minBase} 0`
+        : `⏱️ Usage: /${baseKey.startsWith("panic") ? "panic_interval" : "scan_interval"} ${minBase} 0`;
     }
     this.storage.setSetting(baseKey, String(base));
     this.storage.setSetting(jitterKey, String(jitter));
@@ -737,7 +771,7 @@ class TelegramControl {
   commandFast(args, language) {
     const enabled = parseOnOff(args[0]);
     if (enabled === null) {
-      return language === "it" ? "Uso: /fast on|off" : "Usage: /fast on|off";
+      return language === "it" ? "⚡ Uso: /fast on oppure /fast off" : "⚡ Usage: /fast on or /fast off";
     }
     setMany(this.storage, enabled ? FAST_PROFILE_ON : FAST_PROFILE_OFF);
     return this.ok(language, enabled ? "fast profile on" : "fast profile off");
@@ -748,7 +782,7 @@ class TelegramControl {
     const keys = RESET_ALIASES[key] || (USER_SETTING_KEYS.includes(key) ? [key] : null);
     if (!keys) {
       const allowed = [...new Set([...Object.keys(RESET_ALIASES), ...USER_SETTING_KEYS])].sort().join(", ");
-      return language === "it" ? `Uso: /reset key|all\nKey: ${allowed}` : `Usage: /reset key|all\nKeys: ${allowed}`;
+      return language === "it" ? `🧹 Dimmi cosa ripulire: /reset key oppure /reset all\nKey: ${allowed}` : `🧹 Tell me what to clean up: /reset key or /reset all\nKeys: ${allowed}`;
     }
     for (const settingKey of keys) {
       this.storage.deleteSetting(settingKey);
@@ -757,7 +791,7 @@ class TelegramControl {
   }
 
   ok(language, detail) {
-    return language === "it" ? `Fatto.\n${detail}` : `Done.\n${detail}`;
+    return language === "it" ? `✅ Fatto, ho aggiornato questo:\n${detail}` : `✅ Done, I updated this:\n${detail}`;
   }
 
   formatMenu(language, actionResult = "") {
@@ -767,48 +801,43 @@ class TelegramControl {
     const lines =
       language === "it"
         ? [
-            "Vine Watcher Control Panel",
+            "🚀 Vine Watcher Control Panel",
+            "Sto tenendo d'occhio Vine. Ecco come sono messo adesso:",
             "",
-            `Notify all: ${boolText(notifyAllActive(config), language)} ` +
-              `(sempre ${boolText(config.notifyAllProducts, language)}, finestra ${
-                config.notifyAllProductsWindow || "none"
-              })`,
-            `Score minimo: ${config.minScoreToNotify}`,
-            `Valore minimo: ${formatEuro(config.minValueToNotifyEur)}`,
-            `Strict: ${boolText(config.strictNotifyMode, language)} ` +
+            `🔔 Notify all ora: ${boolText(notifyAllActive(config), language)}`,
+            `🌍 Notify all 24/7: ${boolText(config.notifyAllProducts, language)}`,
+            `🕘 Finestra notify-all: ${formatWindow(config.notifyAllProductsWindow, language)}`,
+            `🎯 Score minimo: ${config.minScoreToNotify}`,
+            `💶 Valore minimo: ${formatEuro(config.minValueToNotifyEur)}`,
+            `🧪 Strict mode: ${boolText(config.strictNotifyMode, language)} ` +
               `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
-            `Panic: ${boolText(isPanicActive(config), language)} ` +
+            `⚡ Panic mode: ${boolText(isPanicActive(config), language)} ` +
               `(${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter)`
           ]
         : [
-            "Vine Watcher Control Panel",
+            "🚀 Vine Watcher Control Panel",
+            "I am watching Vine. Here is the current setup:",
             "",
-            `Notify all: ${boolText(notifyAllActive(config), language)} ` +
-              `(always ${boolText(config.notifyAllProducts, language)}, window ${
-                config.notifyAllProductsWindow || "none"
-              })`,
-            `Min score: ${config.minScoreToNotify}`,
-            `Min value: ${formatEuro(config.minValueToNotifyEur)}`,
-            `Strict: ${boolText(config.strictNotifyMode, language)} ` +
+            `🔔 Notify all now: ${boolText(notifyAllActive(config), language)}`,
+            `🌍 Notify all 24/7: ${boolText(config.notifyAllProducts, language)}`,
+            `🕘 Notify-all window: ${formatWindow(config.notifyAllProductsWindow, language)}`,
+            `🎯 Min score: ${config.minScoreToNotify}`,
+            `💶 Min value: ${formatEuro(config.minValueToNotifyEur)}`,
+            `🧪 Strict mode: ${boolText(config.strictNotifyMode, language)} ` +
               `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
-            `Panic: ${boolText(isPanicActive(config), language)} ` +
+            `⚡ Panic mode: ${boolText(isPanicActive(config), language)} ` +
               `(${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter)`
           ];
 
     if (lastCycle) {
-      lines.push(
-        "",
-        language === "it" ? "Ultimo ciclo:" : "Last cycle:",
-        `scanned=${lastCycle.scanned} new=${lastCycle.newProducts} notified=${lastCycle.notified} max_score=${lastCycle.maxScore}`,
-        `elapsed=${lastCycle.elapsedSeconds}s`
-      );
+      lines.push("", ...formatLastCycle(lastCycle, language));
     }
 
     if (actionResult) {
-      lines.push("", language === "it" ? "Ultima azione:" : "Last action:", actionResult);
+      lines.push("", language === "it" ? "✅ Ultima azione:" : "✅ Last action:", actionResult);
     }
 
-    lines.push("", language === "it" ? "Scegli un'azione:" : "Choose an action:");
+    lines.push("", language === "it" ? "👇 Scegli un'azione:" : "👇 Choose an action:");
     return lines.join("\n");
   }
 
@@ -819,40 +848,37 @@ class TelegramControl {
     const lines =
       language === "it"
         ? [
-            "Vine Watcher status",
+            "📊 Vine Watcher status",
+            "Sono operativo. Questa è la foto del momento:",
             "",
-            `Notify all: ${boolText(notifyAllActive(config), language)}`,
-            `Notify all sempre: ${boolText(config.notifyAllProducts, language)}`,
-            `Notify all finestra: ${config.notifyAllProductsWindow || "none"}`,
-            `Score minimo: ${config.minScoreToNotify}`,
-            `Valore minimo: ${formatEuro(config.minValueToNotifyEur)}`,
-            `Strict: ${boolText(config.strictNotifyMode, language)} (${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
-            `Panic: ${boolText(isPanicActive(config), language)}`,
-            `Intervallo panic: ${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter`,
-            `Limite notifiche/ciclo: ${config.maxNotificationsPerCycle}`
+            `🔔 Notify all ora: ${boolText(notifyAllActive(config), language)}`,
+            `🌍 Notify all 24/7: ${boolText(config.notifyAllProducts, language)}`,
+            `🕘 Finestra notify-all: ${formatWindow(config.notifyAllProductsWindow, language)}`,
+            `🎯 Score minimo: ${config.minScoreToNotify}`,
+            `💶 Valore minimo: ${formatEuro(config.minValueToNotifyEur)}`,
+            `🧪 Strict mode: ${boolText(config.strictNotifyMode, language)} ` +
+              `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
+            `⚡ Panic mode: ${boolText(isPanicActive(config), language)}`,
+            `⏱️ Intervallo panic: ${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter`,
+            `📣 Limite notifiche per giro: ${config.maxNotificationsPerCycle}`
           ]
         : [
-            "Vine Watcher status",
+            "📊 Vine Watcher status",
+            "I am running. Here is the current snapshot:",
             "",
-            `Notify all: ${boolText(notifyAllActive(config), language)}`,
-            `Notify all always: ${boolText(config.notifyAllProducts, language)}`,
-            `Notify all window: ${config.notifyAllProductsWindow || "none"}`,
-            `Min score: ${config.minScoreToNotify}`,
-            `Min value: ${formatEuro(config.minValueToNotifyEur)}`,
-            `Strict: ${boolText(config.strictNotifyMode, language)} (${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
-            `Panic: ${boolText(isPanicActive(config), language)}`,
-            `Panic interval: ${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter`,
-            `Notification limit/cycle: ${config.maxNotificationsPerCycle}`
+            `🔔 Notify all now: ${boolText(notifyAllActive(config), language)}`,
+            `🌍 Notify all 24/7: ${boolText(config.notifyAllProducts, language)}`,
+            `🕘 Notify-all window: ${formatWindow(config.notifyAllProductsWindow, language)}`,
+            `🎯 Min score: ${config.minScoreToNotify}`,
+            `💶 Min value: ${formatEuro(config.minValueToNotifyEur)}`,
+            `🧪 Strict mode: ${boolText(config.strictNotifyMode, language)} ` +
+              `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
+            `⚡ Panic mode: ${boolText(isPanicActive(config), language)}`,
+            `⏱️ Panic interval: ${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter`,
+            `📣 Notification limit per sweep: ${config.maxNotificationsPerCycle}`
           ];
 
-    if (lastCycle) {
-      lines.push(
-        "",
-        language === "it" ? "Ultimo ciclo:" : "Last cycle:",
-        `scanned=${lastCycle.scanned} new=${lastCycle.newProducts} notified=${lastCycle.notified} max_score=${lastCycle.maxScore}`,
-        `elapsed=${lastCycle.elapsedSeconds}s`
-      );
-    }
+    lines.push("", ...formatLastCycle(lastCycle, language));
 
     return lines.join("\n");
   }
@@ -864,48 +890,52 @@ class TelegramControl {
     const lines =
       language === "it"
         ? [
-            "Configurazione efficace",
+            "⚙️ Configurazione efficace",
+            "Questi sono i valori che sto usando adesso, inclusi eventuali override runtime.",
             "",
-            `Lingua: ${config.telegramControlLanguage}`,
-            `Notify all: ${boolText(config.notifyAllProducts, language)}`,
-            `Notify all window: ${config.notifyAllProductsWindow || "none"}`,
-            `Min score: ${config.minScoreToNotify}`,
-            `Min value: ${formatEuro(config.minValueToNotifyEur)}`,
-            `Strict: ${boolText(config.strictNotifyMode, language)}`,
-            `Strict signals: ${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-`,
-            `Max notifications: ${config.maxNotificationsPerCycle}`,
-            `Panic mode: ${boolText(config.panicMode, language)}`,
-            `Panic until: ${config.panicUntilMs ? new Date(config.panicUntilMs).toISOString() : "none"}`,
-            `Panic interval: ${config.panicScanIntervalSeconds}s jitter=${config.panicScanJitterSeconds}s`,
-            `Scan interval: ${config.scanIntervalSeconds}s jitter=${config.scanJitterSeconds}s`,
-            `Page timeout: ${seconds(config.pageTimeoutMs)}`,
-            `Product ready timeout: ${seconds(config.productReadyTimeoutMs)}`,
-            `Page settle: ${seconds(config.pageSettleMs)}`,
-            `Section delay: ${seconds(config.sectionDelayMs)}`,
+            `🗣️ Lingua: ${config.telegramControlLanguage}`,
+            `🔔 Notify all ora: ${boolText(notifyAllActive(config), language)}`,
+            `🌍 Notify all 24/7: ${boolText(config.notifyAllProducts, language)}`,
+            `🕘 Finestra notify-all: ${formatWindow(config.notifyAllProductsWindow, language)}`,
+            `🎯 Min score: ${config.minScoreToNotify}`,
+            `💶 Min value: ${formatEuro(config.minValueToNotifyEur)}`,
+            `🧪 Strict: ${boolText(config.strictNotifyMode, language)}`,
+            `🧪 Strict signals: ${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-`,
+            `📣 Max notifiche: ${config.maxNotificationsPerCycle}`,
+            `⚡ Panic mode 24/7: ${boolText(config.panicMode, language)}`,
+            `🚀 Panic fino a: ${config.panicUntilMs ? new Date(config.panicUntilMs).toISOString() : "nessuno"}`,
+            `⏱️ Panic interval: ${config.panicScanIntervalSeconds}s jitter=${config.panicScanJitterSeconds}s`,
+            `🔁 Scan interval: ${config.scanIntervalSeconds}s jitter=${config.scanJitterSeconds}s`,
+            `🌐 Page timeout: ${seconds(config.pageTimeoutMs)}`,
+            `📦 Product ready timeout: ${seconds(config.productReadyTimeoutMs)}`,
+            `🧘 Page settle: ${seconds(config.pageSettleMs)}`,
+            `🧭 Section delay: ${seconds(config.sectionDelayMs)}`,
             "",
-            `Override runtime: ${runtimeKeys.length > 0 ? runtimeKeys.join(", ") : "none"}`
+            `📝 Override runtime: ${runtimeKeys.length > 0 ? runtimeKeys.join(", ") : "nessuno"}`
           ]
         : [
-            "Effective configuration",
+            "⚙️ Effective configuration",
+            "These are the values I am using right now, including runtime overrides.",
             "",
-            `Language: ${config.telegramControlLanguage}`,
-            `Notify all: ${boolText(config.notifyAllProducts, language)}`,
-            `Notify all window: ${config.notifyAllProductsWindow || "none"}`,
-            `Min score: ${config.minScoreToNotify}`,
-            `Min value: ${formatEuro(config.minValueToNotifyEur)}`,
-            `Strict: ${boolText(config.strictNotifyMode, language)}`,
-            `Strict signals: ${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-`,
-            `Max notifications: ${config.maxNotificationsPerCycle}`,
-            `Panic mode: ${boolText(config.panicMode, language)}`,
-            `Panic until: ${config.panicUntilMs ? new Date(config.panicUntilMs).toISOString() : "none"}`,
-            `Panic interval: ${config.panicScanIntervalSeconds}s jitter=${config.panicScanJitterSeconds}s`,
-            `Scan interval: ${config.scanIntervalSeconds}s jitter=${config.scanJitterSeconds}s`,
-            `Page timeout: ${seconds(config.pageTimeoutMs)}`,
-            `Product ready timeout: ${seconds(config.productReadyTimeoutMs)}`,
-            `Page settle: ${seconds(config.pageSettleMs)}`,
-            `Section delay: ${seconds(config.sectionDelayMs)}`,
+            `🗣️ Language: ${config.telegramControlLanguage}`,
+            `🔔 Notify all now: ${boolText(notifyAllActive(config), language)}`,
+            `🌍 Notify all 24/7: ${boolText(config.notifyAllProducts, language)}`,
+            `🕘 Notify-all window: ${formatWindow(config.notifyAllProductsWindow, language)}`,
+            `🎯 Min score: ${config.minScoreToNotify}`,
+            `💶 Min value: ${formatEuro(config.minValueToNotifyEur)}`,
+            `🧪 Strict: ${boolText(config.strictNotifyMode, language)}`,
+            `🧪 Strict signals: ${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-`,
+            `📣 Max notifications: ${config.maxNotificationsPerCycle}`,
+            `⚡ Panic mode 24/7: ${boolText(config.panicMode, language)}`,
+            `🚀 Panic until: ${config.panicUntilMs ? new Date(config.panicUntilMs).toISOString() : "none"}`,
+            `⏱️ Panic interval: ${config.panicScanIntervalSeconds}s jitter=${config.panicScanJitterSeconds}s`,
+            `🔁 Scan interval: ${config.scanIntervalSeconds}s jitter=${config.scanJitterSeconds}s`,
+            `🌐 Page timeout: ${seconds(config.pageTimeoutMs)}`,
+            `📦 Product ready timeout: ${seconds(config.productReadyTimeoutMs)}`,
+            `🧘 Page settle: ${seconds(config.pageSettleMs)}`,
+            `🧭 Section delay: ${seconds(config.sectionDelayMs)}`,
             "",
-            `Runtime overrides: ${runtimeKeys.length > 0 ? runtimeKeys.join(", ") : "none"}`
+            `📝 Runtime overrides: ${runtimeKeys.length > 0 ? runtimeKeys.join(", ") : "none"}`
           ];
     return lines.join("\n");
   }
