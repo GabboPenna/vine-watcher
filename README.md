@@ -104,6 +104,7 @@ Only messages from the configured `TELEGRAM_CHAT_ID` are accepted. No inbound po
 Useful commands:
 
 ```text
+/menu                         open the button control panel
 /help                         show the full command guide
 /lang it|en                   switch bot language
 /status                       live status and last scan summary
@@ -117,6 +118,8 @@ Useful commands:
 /fast on|off                  fast or conservative profile
 /reset all                    clear runtime overrides
 ```
+
+When Telegram Control starts it also registers the bot command menu, so Telegram clients can show native commands from the chat menu. `/menu` sends an inline button panel for the common actions.
 
 ## Runtime Notes
 

@@ -40,6 +40,8 @@ TELEGRAM_CONTROL_LANGUAGE=en
 
 The control loop uses Telegram long polling. You do not need a webhook, public URL, open port, reverse proxy, or TLS certificate.
 
+When the control loop starts, it registers Telegram's native command menu and sets the chat menu button to `commands`. Send `/menu` to open the inline button control panel.
+
 Security behavior:
 
 - only messages from `TELEGRAM_CHAT_ID` are accepted
@@ -50,6 +52,7 @@ Security behavior:
 Commands:
 
 ```text
+/menu
 /help
 /lang it|en
 /status

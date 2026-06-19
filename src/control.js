@@ -50,6 +50,21 @@ const RESET_ALIASES = {
   fast: Object.keys(FAST_PROFILE_ON)
 };
 
+const CALLBACK_COMMANDS = {
+  "vw:fast:on": "/fast on",
+  "vw:fast:off": "/fast off",
+  "vw:notify_all:on": "/notify_all on",
+  "vw:notify_all:off": "/notify_all off",
+  "vw:panic:30": "/panic 30",
+  "vw:panic:off": "/panic off",
+  "vw:score:5": "/min_score 5",
+  "vw:value:35": "/min_value 35",
+  "vw:strict:on": "/strict on",
+  "vw:strict:off": "/strict off",
+  "vw:lang:it": "/lang it",
+  "vw:lang:en": "/lang en"
+};
+
 function normalizeCommandName(value) {
   return String(value || "").split("@")[0].trim().toLowerCase();
 }
@@ -128,12 +143,47 @@ function seconds(valueMs) {
   return `${Math.round(Number(valueMs || 0) / 1000)}s`;
 }
 
+function controlCommands(language) {
+  if (language === "it") {
+    return [
+      { command: "menu", description: "Apri il pannello con pulsanti" },
+      { command: "status", description: "Stato live e ultimo ciclo" },
+      { command: "config", description: "Configurazione efficace corrente" },
+      { command: "help", description: "Guida completa dei comandi" },
+      { command: "fast", description: "Profilo veloce o conservativo" },
+      { command: "panic", description: "Panic mode on, off o temporaneo" },
+      { command: "notify_all", description: "Segnala ogni prodotto on/off" },
+      { command: "notify_all_window", description: "Fascia oraria notify-all" },
+      { command: "min_score", description: "Imposta soglia score" },
+      { command: "min_value", description: "Imposta soglia valore stimato" },
+      { command: "strict", description: "Strict mode on/off" },
+      { command: "lang", description: "Lingua bot it/en" }
+    ];
+  }
+
+  return [
+    { command: "menu", description: "Open the button control panel" },
+    { command: "status", description: "Live status and last cycle" },
+    { command: "config", description: "Current effective configuration" },
+    { command: "help", description: "Full command guide" },
+    { command: "fast", description: "Fast or conservative profile" },
+    { command: "panic", description: "Panic mode on, off, or temporary" },
+    { command: "notify_all", description: "Notify every product on/off" },
+    { command: "notify_all_window", description: "Notify-all time window" },
+    { command: "min_score", description: "Set score threshold" },
+    { command: "min_value", description: "Set estimated value threshold" },
+    { command: "strict", description: "Strict mode on/off" },
+    { command: "lang", description: "Bot language it/en" }
+  ];
+}
+
 function helpMessage(language) {
   if (language === "it") {
     return [
       "Vine Watcher Control",
       "",
       "Comandi principali:",
+      "/menu - pannello con pulsanti rapidi",
       "/status - stato live, ultimo ciclo e modalita attive",
       "/config - configurazione efficace corrente",
       "/help - questo help",
@@ -172,6 +222,7 @@ function helpMessage(language) {
     "Vine Watcher Control",
     "",
     "Core commands:",
+    "/menu - button control panel",
     "/status - live status, last cycle, active modes",
     "/config - current effective configuration",
     "/help - this help",
@@ -235,6 +286,9 @@ class TelegramControl {
     }
 
     this.running = true;
+    await this.registerCommands().catch((error) => {
+      this.logger.warn(`Telegram command menu registration failed: ${error.message}`);
+    });
     await this.initializeOffset();
     this.loopPromise = this.pollLoop().catch((error) => {
       this.logger.error(`Telegram control loop stopped: ${error.message}`);
@@ -244,6 +298,12 @@ class TelegramControl {
 
   stop() {
     this.running = false;
+  }
+
+  async registerCommands(language = this.language()) {
+    await this.telegram.setCommands(controlCommands(language));
+    await this.telegram.setChatMenuButton();
+    this.logger.info(`Telegram command menu registered in ${language}`);
   }
 
   async initializeOffset() {
@@ -293,6 +353,11 @@ class TelegramControl {
   }
 
   async handleUpdate(update) {
+    if (update && update.callback_query) {
+      await this.handleCallbackQuery(update.callback_query);
+      return;
+    }
+
     const message = update && update.message;
     const text = message && message.text;
     if (!message || !text) {
@@ -307,12 +372,100 @@ class TelegramControl {
     }
 
     const response = await this.executeCommand(text);
-    if (response) {
-      await this.telegram.sendText(response);
-    }
+    await this.sendResponse(response);
   }
 
-  async executeCommand(text) {
+  async handleCallbackQuery(callbackQuery) {
+    const message = callbackQuery && callbackQuery.message;
+    const chatId = String(message && message.chat && message.chat.id ? message.chat.id : "");
+    const messageId = message && message.message_id;
+    const allowedChatId = String(this.getConfig().telegramChatId || "");
+
+    if (chatId !== allowedChatId) {
+      this.logger.warn(`Ignoring Telegram control callback from unauthorized chat ${chatId || "unknown"}`);
+      if (callbackQuery.id) {
+        await this.telegram.answerCallbackQuery(callbackQuery.id, "Unauthorized").catch(() => {});
+      }
+      return;
+    }
+
+    const data = String(callbackQuery.data || "");
+    const language = this.language();
+    let text = "";
+    let options = {};
+    let toast = language === "it" ? "Fatto" : "Done";
+
+    if (data === "vw:menu") {
+      ({ text, options } = this.menuResponse(language));
+    } else if (data === "vw:status") {
+      text = this.formatStatus(language);
+      options = {
+        reply_markup: this.backKeyboard(language)
+      };
+    } else if (data === "vw:config") {
+      text = this.formatConfig(language);
+      options = {
+        reply_markup: this.backKeyboard(language)
+      };
+    } else if (data === "vw:help") {
+      text = helpMessage(language);
+      options = {
+        reply_markup: this.backKeyboard(language)
+      };
+    } else if (CALLBACK_COMMANDS[data]) {
+      const result = await this.executeCommand(CALLBACK_COMMANDS[data], {
+        fromCallback: true
+      });
+      const nextLanguage = this.language();
+      const response = this.menuResponse(nextLanguage, typeof result === "string" ? result : "");
+      text = response.text;
+      options = response.options;
+      toast = nextLanguage === "it" ? "Aggiornato" : "Updated";
+    } else {
+      text = language === "it" ? "Azione non riconosciuta. Usa /menu." : "Unknown action. Use /menu.";
+      options = {
+        reply_markup: this.backKeyboard(language)
+      };
+      toast = language === "it" ? "Azione non valida" : "Invalid action";
+    }
+
+    if (callbackQuery.id) {
+      await this.telegram.answerCallbackQuery(callbackQuery.id, toast).catch((error) => {
+        this.logger.warn(`Telegram callback answer failed: ${error.message}`);
+      });
+    }
+
+    await this.editOrSend(chatId, messageId, text, options);
+  }
+
+  async sendResponse(response) {
+    if (!response) {
+      return;
+    }
+    if (typeof response === "string") {
+      await this.telegram.sendText(response);
+      return;
+    }
+    await this.telegram.sendText(response.text, response.options || {});
+  }
+
+  async editOrSend(chatId, messageId, text, options = {}) {
+    if (chatId && messageId) {
+      try {
+        await this.telegram.editText(chatId, messageId, text, options);
+        return;
+      } catch (error) {
+        this.logger.warn(`Telegram menu edit failed, sending a new message: ${error.message}`);
+      }
+    }
+
+    await this.telegram.sendText(text, {
+      ...options,
+      chat_id: chatId || undefined
+    });
+  }
+
+  async executeCommand(text, options = {}) {
     const parsed = parseCommand(text);
     const language = this.language();
     if (!parsed) {
@@ -321,11 +474,14 @@ class TelegramControl {
 
     const { command, args } = parsed;
 
-    if (command === "/start" || command === "/help" || command === "/aiuto") {
+    if (command === "/start" || command === "/menu") {
+      return this.menuResponse(language);
+    }
+    if (command === "/help" || command === "/aiuto") {
       return helpMessage(language);
     }
     if (command === "/lang" || command === "/language" || command === "/lingua") {
-      return this.commandLanguage(args, language);
+      return this.commandLanguage(args, language, options);
     }
     if (command === "/status" || command === "/stato") {
       return this.formatStatus(this.language());
@@ -375,12 +531,113 @@ class TelegramControl {
       : `Unknown command: ${command}\nUse /help.`;
   }
 
-  commandLanguage(args, language) {
+  menuResponse(language, actionResult = "") {
+    return {
+      text: this.formatMenu(language, actionResult),
+      options: {
+        reply_markup: this.menuKeyboard(language)
+      }
+    };
+  }
+
+  menuKeyboard(language) {
+    const labels =
+      language === "it"
+        ? {
+            status: "Status",
+            config: "Config",
+            refresh: "Aggiorna",
+            fastOn: "Fast ON",
+            fastOff: "Fast OFF",
+            notifyOn: "Notify all ON",
+            notifyOff: "Notify all OFF",
+            panic30: "Panic 30m",
+            panicOff: "Panic OFF",
+            score5: "Score 5",
+            value35: "Valore 35",
+            strictOn: "Strict ON",
+            strictOff: "Strict OFF",
+            italian: "Italiano",
+            english: "English",
+            help: "Help"
+          }
+        : {
+            status: "Status",
+            config: "Config",
+            refresh: "Refresh",
+            fastOn: "Fast ON",
+            fastOff: "Fast OFF",
+            notifyOn: "Notify all ON",
+            notifyOff: "Notify all OFF",
+            panic30: "Panic 30m",
+            panicOff: "Panic OFF",
+            score5: "Score 5",
+            value35: "Value 35",
+            strictOn: "Strict ON",
+            strictOff: "Strict OFF",
+            italian: "Italiano",
+            english: "English",
+            help: "Help"
+          };
+
+    return {
+      inline_keyboard: [
+        [
+          { text: labels.status, callback_data: "vw:status" },
+          { text: labels.config, callback_data: "vw:config" },
+          { text: labels.refresh, callback_data: "vw:menu" }
+        ],
+        [
+          { text: labels.fastOn, callback_data: "vw:fast:on" },
+          { text: labels.fastOff, callback_data: "vw:fast:off" }
+        ],
+        [
+          { text: labels.notifyOn, callback_data: "vw:notify_all:on" },
+          { text: labels.notifyOff, callback_data: "vw:notify_all:off" }
+        ],
+        [
+          { text: labels.panic30, callback_data: "vw:panic:30" },
+          { text: labels.panicOff, callback_data: "vw:panic:off" }
+        ],
+        [
+          { text: labels.score5, callback_data: "vw:score:5" },
+          { text: labels.value35, callback_data: "vw:value:35" }
+        ],
+        [
+          { text: labels.strictOn, callback_data: "vw:strict:on" },
+          { text: labels.strictOff, callback_data: "vw:strict:off" }
+        ],
+        [
+          { text: labels.italian, callback_data: "vw:lang:it" },
+          { text: labels.english, callback_data: "vw:lang:en" },
+          { text: labels.help, callback_data: "vw:help" }
+        ]
+      ]
+    };
+  }
+
+  backKeyboard(language) {
+    return {
+      inline_keyboard: [
+        [
+          {
+            text: language === "it" ? "Torna al menu" : "Back to menu",
+            callback_data: "vw:menu"
+          }
+        ]
+      ]
+    };
+  }
+
+  async commandLanguage(args, language) {
     const nextLanguage = normalizeLanguage(args[0], "");
     if (!nextLanguage) {
       return language === "it" ? "Uso: /lang it|en" : "Usage: /lang it|en";
     }
     this.storage.setSetting("control_language", nextLanguage);
+    await this.registerCommands(nextLanguage).catch((error) => {
+      this.logger.warn(`Telegram command menu update failed: ${error.message}`);
+    });
     return nextLanguage === "it" ? "Lingua impostata: italiano." : "Language set: English.";
   }
 
@@ -501,6 +758,58 @@ class TelegramControl {
 
   ok(language, detail) {
     return language === "it" ? `Fatto.\n${detail}` : `Done.\n${detail}`;
+  }
+
+  formatMenu(language, actionResult = "") {
+    const config = this.getConfig();
+    const status = this.getStatus();
+    const lastCycle = status.lastCycle;
+    const lines =
+      language === "it"
+        ? [
+            "Vine Watcher Control Panel",
+            "",
+            `Notify all: ${boolText(notifyAllActive(config), language)} ` +
+              `(sempre ${boolText(config.notifyAllProducts, language)}, finestra ${
+                config.notifyAllProductsWindow || "none"
+              })`,
+            `Score minimo: ${config.minScoreToNotify}`,
+            `Valore minimo: ${formatEuro(config.minValueToNotifyEur)}`,
+            `Strict: ${boolText(config.strictNotifyMode, language)} ` +
+              `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
+            `Panic: ${boolText(isPanicActive(config), language)} ` +
+              `(${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter)`
+          ]
+        : [
+            "Vine Watcher Control Panel",
+            "",
+            `Notify all: ${boolText(notifyAllActive(config), language)} ` +
+              `(always ${boolText(config.notifyAllProducts, language)}, window ${
+                config.notifyAllProductsWindow || "none"
+              })`,
+            `Min score: ${config.minScoreToNotify}`,
+            `Min value: ${formatEuro(config.minValueToNotifyEur)}`,
+            `Strict: ${boolText(config.strictNotifyMode, language)} ` +
+              `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
+            `Panic: ${boolText(isPanicActive(config), language)} ` +
+              `(${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter)`
+          ];
+
+    if (lastCycle) {
+      lines.push(
+        "",
+        language === "it" ? "Ultimo ciclo:" : "Last cycle:",
+        `scanned=${lastCycle.scanned} new=${lastCycle.newProducts} notified=${lastCycle.notified} max_score=${lastCycle.maxScore}`,
+        `elapsed=${lastCycle.elapsedSeconds}s`
+      );
+    }
+
+    if (actionResult) {
+      lines.push("", language === "it" ? "Ultima azione:" : "Last action:", actionResult);
+    }
+
+    lines.push("", language === "it" ? "Scegli un'azione:" : "Choose an action:");
+    return lines.join("\n");
   }
 
   formatStatus(language) {

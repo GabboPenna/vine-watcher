@@ -121,16 +121,56 @@ class TelegramClient {
     return true;
   }
 
-  async sendText(text) {
+  async sendText(text, options = {}) {
     if (!this.enabled) {
       this.logger.warn("Telegram token/chat id missing; text notification skipped");
       return false;
     }
 
-    await this.request("sendMessage", {
-      chat_id: this.chatId,
+    const payload = {
+      chat_id: options.chat_id || this.chatId,
       text: truncate(text, 4096),
-      disable_web_page_preview: true
+      disable_web_page_preview: options.disable_web_page_preview === undefined ? true : options.disable_web_page_preview
+    };
+
+    if (options.reply_markup) {
+      payload.reply_markup = options.reply_markup;
+    }
+
+    await this.request("sendMessage", payload);
+    return true;
+  }
+
+  async editText(chatId, messageId, text, options = {}) {
+    if (!this.enabled) {
+      this.logger.warn("Telegram token/chat id missing; edit skipped");
+      return false;
+    }
+
+    const payload = {
+      chat_id: chatId,
+      message_id: messageId,
+      text: truncate(text, 4096),
+      disable_web_page_preview: options.disable_web_page_preview === undefined ? true : options.disable_web_page_preview
+    };
+
+    if (options.reply_markup) {
+      payload.reply_markup = options.reply_markup;
+    }
+
+    await this.request("editMessageText", payload);
+    return true;
+  }
+
+  async answerCallbackQuery(callbackQueryId, text = "") {
+    if (!this.enabled) {
+      this.logger.warn("Telegram token/chat id missing; callback answer skipped");
+      return false;
+    }
+
+    await this.request("answerCallbackQuery", {
+      callback_query_id: callbackQueryId,
+      text: truncate(text, 200)
     });
     return true;
   }
@@ -138,7 +178,7 @@ class TelegramClient {
   async getUpdates(options = {}) {
     const payload = {
       timeout: options.timeout || 0,
-      allowed_updates: ["message"]
+      allowed_updates: ["message", "callback_query"]
     };
 
     if (options.offset !== undefined && options.offset !== null) {
@@ -146,6 +186,34 @@ class TelegramClient {
     }
 
     return this.request("getUpdates", payload);
+  }
+
+  async setCommands(commands, options = {}) {
+    if (!this.enabled) {
+      this.logger.warn("Telegram token/chat id missing; command menu skipped");
+      return false;
+    }
+
+    await this.request("setMyCommands", {
+      commands,
+      ...options
+    });
+    return true;
+  }
+
+  async setChatMenuButton() {
+    if (!this.enabled) {
+      this.logger.warn("Telegram token/chat id missing; chat menu button skipped");
+      return false;
+    }
+
+    await this.request("setChatMenuButton", {
+      chat_id: this.chatId,
+      menu_button: {
+        type: "commands"
+      }
+    });
+    return true;
   }
 
   async sendCriticalError(error) {

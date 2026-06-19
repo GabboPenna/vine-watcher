@@ -266,6 +266,10 @@ function testStorageEstimatedValue() {
 async function testTelegramControlCommands() {
   const settings = {};
   const sentMessages = [];
+  const editedMessages = [];
+  const answeredCallbacks = [];
+  const registeredCommands = [];
+  let menuButtonRegistered = false;
   const fakeStorage = {
     getSettings() {
       return { ...settings };
@@ -285,8 +289,24 @@ async function testTelegramControlCommands() {
     async getUpdates() {
       return [];
     },
-    async sendText(text) {
-      sentMessages.push(text);
+    async sendText(text, options = {}) {
+      sentMessages.push({ text, options });
+      return true;
+    },
+    async editText(chatId, messageId, text, options = {}) {
+      editedMessages.push({ chatId, messageId, text, options });
+      return true;
+    },
+    async answerCallbackQuery(id, text) {
+      answeredCallbacks.push({ id, text });
+      return true;
+    },
+    async setCommands(commands) {
+      registeredCommands.push(commands);
+      return true;
+    },
+    async setChatMenuButton() {
+      menuButtonRegistered = true;
       return true;
     }
   };
@@ -336,7 +356,14 @@ async function testTelegramControlCommands() {
     command: "/status",
     args: ["now"]
   });
+  await control.registerCommands();
+  assert.ok(registeredCommands[0].some((command) => command.command === "menu"));
+  assert.equal(menuButtonRegistered, true);
+
   assert.match(helpMessage("it"), /Comandi principali/);
+  const menu = await control.executeCommand("/menu");
+  assert.match(menu.text, /Control Panel/);
+  assert.ok(menu.options.reply_markup.inline_keyboard.length > 0);
   assert.match(await control.executeCommand("/help"), /Vine Watcher Control/);
   assert.match(await control.executeCommand("/status"), /Ultimo ciclo/);
 
@@ -378,7 +405,48 @@ async function testTelegramControlCommands() {
     }
   });
   assert.equal(sentMessages.length, 1);
-  assert.match(sentMessages[0], /Effective configuration/);
+  assert.match(sentMessages[0].text, /Effective configuration/);
+
+  await control.handleUpdate({
+    update_id: 12,
+    message: {
+      chat: { id: 123 },
+      text: "/menu"
+    }
+  });
+  assert.equal(sentMessages.length, 2);
+  assert.ok(sentMessages[1].options.reply_markup.inline_keyboard.length > 0);
+
+  await control.handleUpdate({
+    update_id: 13,
+    callback_query: {
+      id: "callback-1",
+      data: "vw:fast:off",
+      message: {
+        message_id: 44,
+        chat: { id: 123 }
+      }
+    }
+  });
+  assert.equal(settings.panic_mode, "false");
+  assert.equal(editedMessages.length, 1);
+  assert.match(editedMessages[0].text, /Control Panel/);
+  assert.equal(answeredCallbacks[0].id, "callback-1");
+
+  await control.handleUpdate({
+    update_id: 14,
+    callback_query: {
+      id: "callback-2",
+      data: "vw:status",
+      message: {
+        message_id: 44,
+        chat: { id: 123 }
+      }
+    }
+  });
+  assert.equal(editedMessages.length, 2);
+  assert.match(editedMessages[1].text, /Vine Watcher status/);
+  assert.ok(editedMessages[1].options.reply_markup.inline_keyboard.length > 0);
 }
 
 function testTelegramFormatting() {
