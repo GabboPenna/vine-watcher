@@ -13,6 +13,7 @@ Vine Watcher monitors the Amazon Vine sections already available to your logged-
 - Stores seen products in SQLite to avoid duplicate alerts.
 - Scores products with keyword, brand, category, and negative-signal rules.
 - Sends Telegram notifications with score, reasons, ASIN, image when available, and the Vine section URL.
+- Can be controlled from Telegram with an optional private command interface.
 - Supports estimated-value alerts when the visible Vine card exposes a value.
 - Runs on Debian with systemd or with Docker Compose.
 - Uses a persistent Chromium profile created by manual login.
@@ -84,9 +85,38 @@ NOTIFY_ALL_PRODUCTS_WINDOW=
 STRICT_NOTIFY_MODE=true
 MAX_NOTIFICATIONS_PER_CYCLE=5
 STOP_ON_SESSION_ATTENTION=true
+TELEGRAM_CONTROL_ENABLED=false
 ```
 
 Full reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
+
+## Telegram Control
+
+Enable the optional command interface:
+
+```bash
+TELEGRAM_CONTROL_ENABLED=true
+TELEGRAM_CONTROL_LANGUAGE=en
+```
+
+Only messages from the configured `TELEGRAM_CHAT_ID` are accepted. No inbound port, webhook, reverse proxy, or firewall rule is required.
+
+Useful commands:
+
+```text
+/help                         show the full command guide
+/lang it|en                   switch bot language
+/status                       live status and last scan summary
+/config                       effective config and runtime overrides
+/notify_all on|off            notify every product
+/notify_all_window 09:00-22:30 schedule notify-all mode
+/min_score 5                  change score threshold
+/min_value 35                 change estimated value threshold
+/strict on|off                toggle strict filtering
+/panic 30                     fast scan mode for 30 minutes
+/fast on|off                  fast or conservative profile
+/reset all                    clear runtime overrides
+```
 
 ## Runtime Notes
 

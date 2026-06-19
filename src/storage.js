@@ -56,6 +56,12 @@ class ProductStorage {
       CREATE INDEX IF NOT EXISTS idx_products_score ON products(score);
       CREATE INDEX IF NOT EXISTS idx_products_notified ON products(notified);
       CREATE INDEX IF NOT EXISTS idx_products_last_seen_at ON products(last_seen_at);
+
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
     this.migrate();
     this.prepareStatements();
@@ -130,6 +136,18 @@ class ProductStorage {
       SET notified = 1
       WHERE id = ?
     `);
+
+    this.getSettingsStatement = this.db.prepare("SELECT key, value FROM settings ORDER BY key");
+
+    this.getSettingStatement = this.db.prepare("SELECT value FROM settings WHERE key = ?");
+
+    this.setSettingStatement = this.db.prepare(`
+      INSERT INTO settings (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `);
+
+    this.deleteSettingStatement = this.db.prepare("DELETE FROM settings WHERE key = ?");
   }
 
   findExisting(product) {
@@ -208,6 +226,27 @@ class ProductStorage {
 
   markNotified(productId) {
     this.markNotifiedStatement.run(productId);
+  }
+
+  getSettings() {
+    const settings = {};
+    for (const row of this.getSettingsStatement.all()) {
+      settings[row.key] = row.value;
+    }
+    return settings;
+  }
+
+  getSetting(key, fallback = "") {
+    const row = this.getSettingStatement.get(key);
+    return row ? row.value : fallback;
+  }
+
+  setSetting(key, value) {
+    this.setSettingStatement.run(String(key), String(value), nowIso());
+  }
+
+  deleteSetting(key) {
+    this.deleteSettingStatement.run(String(key));
   }
 
   getStats() {

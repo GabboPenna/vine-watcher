@@ -123,9 +123,11 @@ write_env() {
     return
   fi
 
-  local telegram_token telegram_chat_id vine_url scan_interval scan_jitter min_score min_value strict_mode max_notifications headless notify_errors
+  local telegram_token telegram_chat_id telegram_control telegram_control_language vine_url scan_interval scan_jitter min_score min_value strict_mode max_notifications headless notify_errors
   telegram_token="$(prompt_secret "Telegram bot token")"
   telegram_chat_id="$(prompt "Telegram chat id")"
+  telegram_control="$(prompt "Enable Telegram control commands? true/false" "false")"
+  telegram_control_language="$(prompt "Telegram control language? en/it" "en")"
   vine_url="$(prompt "Amazon Vine base URL" "https://www.amazon.it/vine/vine-items")"
   scan_interval="$(prompt "Scan interval in seconds" "60")"
   scan_jitter="$(prompt "Random jitter in seconds" "15")"
@@ -140,6 +142,9 @@ write_env() {
   cat > "$env_file" <<EOF
 TELEGRAM_BOT_TOKEN=${telegram_token}
 TELEGRAM_CHAT_ID=${telegram_chat_id}
+TELEGRAM_CONTROL_ENABLED=${telegram_control}
+TELEGRAM_CONTROL_POLL_SECONDS=3
+TELEGRAM_CONTROL_LANGUAGE=${telegram_control_language}
 AMAZON_VINE_BASE_URL=${vine_url}
 SCAN_ALL_ITEMS=false
 SCAN_INTERVAL_SECONDS=${scan_interval}
@@ -148,6 +153,8 @@ PANIC_MODE=false
 PANIC_UNTIL=
 PANIC_SCAN_INTERVAL_SECONDS=10
 PANIC_SCAN_JITTER_SECONDS=3
+NOTIFY_ALL_PRODUCTS=false
+NOTIFY_ALL_PRODUCTS_WINDOW=
 MIN_SCORE_TO_NOTIFY=${min_score}
 MIN_VALUE_TO_NOTIFY_EUR=${min_value}
 STRICT_NOTIFY_MODE=${strict_mode}

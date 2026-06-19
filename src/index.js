@@ -2,7 +2,9 @@
 
 const { createBrowserContext } = require("./browser");
 const { loadConfig } = require("./config");
+const { TelegramControl } = require("./control");
 const { createLogger } = require("./logger");
+const { applyRuntimeSettings } = require("./runtime-config");
 const { scoreProduct } = require("./scorer");
 const {
   isBrowserClosedError,
@@ -11,6 +13,7 @@ const {
   VineScanner
 } = require("./scanner");
 const { ProductStorage } = require("./storage");
+const { isTimeWindowActive, parseTimeWindow } = require("./time-window");
 const { delayWithJitter, sleep } = require("./utils");
 const { TelegramClient } = require("./telegram");
 
@@ -52,78 +55,6 @@ function formatEuro(value) {
     return "n/a";
   }
   return `\u20ac${parsed.toFixed(2)}`;
-}
-
-function parseTimeOfDayMinutes(value) {
-  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) {
-    return null;
-  }
-
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-    return null;
-  }
-
-  return hour * 60 + minute;
-}
-
-function parseTimeWindow(value) {
-  const text = String(value || "").trim();
-  const match = text.match(/^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})$/);
-  if (!match) {
-    return null;
-  }
-
-  const start = parseTimeOfDayMinutes(match[1]);
-  const end = parseTimeOfDayMinutes(match[2]);
-  if (start === null || end === null) {
-    return null;
-  }
-
-  return {
-    start,
-    end,
-    label: `${match[1]}-${match[2]}`
-  };
-}
-
-function minutesInTimeZone(nowMs = Date.now(), timeZone = "Europe/Rome") {
-  try {
-    const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23"
-    }).formatToParts(new Date(nowMs));
-    const hour = Number(parts.find((part) => part.type === "hour")?.value);
-    const minute = Number(parts.find((part) => part.type === "minute")?.value);
-    if (Number.isInteger(hour) && Number.isInteger(minute)) {
-      return hour * 60 + minute;
-    }
-  } catch (_error) {
-    // Fall back to the host timezone if an invalid timezone id is configured.
-  }
-
-  const date = new Date(nowMs);
-  return date.getHours() * 60 + date.getMinutes();
-}
-
-function isTimeWindowActive(value, timeZone, nowMs = Date.now()) {
-  const window = parseTimeWindow(value);
-  if (!window) {
-    return false;
-  }
-
-  const current = minutesInTimeZone(nowMs, timeZone);
-  if (window.start === window.end) {
-    return true;
-  }
-  if (window.start < window.end) {
-    return current >= window.start && current < window.end;
-  }
-  return current >= window.start || current < window.end;
 }
 
 function notifyAllProductsReason(config, nowMs = Date.now()) {
@@ -253,14 +184,27 @@ async function runCycle({ scanner, storage, telegram, config, logger }) {
       maxScore === null ? "n/d" : maxScore
     } elapsed=${elapsedSeconds}s`
   );
+
+  return {
+    scanned,
+    newProducts,
+    notified,
+    maxScore: maxScore === null ? "n/d" : maxScore,
+    elapsedSeconds
+  };
 }
 
 async function main() {
   const once = process.argv.includes("--once");
-  const config = loadConfig();
-  const logger = createLogger({ level: config.logLevel });
-  const storage = new ProductStorage(config.databasePath, logger.child("storage"));
-  const telegram = new TelegramClient(config, logger.child("telegram"));
+  const baseConfig = loadConfig();
+  const logger = createLogger({ level: baseConfig.logLevel });
+  const storage = new ProductStorage(baseConfig.databasePath, logger.child("storage"));
+  const telegram = new TelegramClient(baseConfig, logger.child("telegram"));
+  const runtimeStatus = {
+    lastCycle: null
+  };
+  let effectiveConfig = baseConfig;
+  let control = null;
   let context = null;
   let shuttingDown = false;
   let lastCriticalNotificationAt = 0;
@@ -270,12 +214,20 @@ async function main() {
   let nextDelayOverrideMs = 0;
   let nextDelayReason = "";
 
+  function refreshConfig() {
+    effectiveConfig = applyRuntimeSettings(baseConfig, storage.getSettings());
+    return effectiveConfig;
+  }
+
   async function shutdown(signal, exitCode = 0) {
     if (shuttingDown) {
       return;
     }
     shuttingDown = true;
     logger.info(`Shutdown requested by ${signal}`);
+    if (control) {
+      control.stop();
+    }
     if (context) {
       await context.close().catch((error) => logger.warn(`Browser close failed: ${error.message}`));
     }
@@ -297,39 +249,53 @@ async function main() {
   });
 
   storage.init();
-  context = await createBrowserContext(config, logger.child("browser"));
+  refreshConfig();
+  context = await createBrowserContext(effectiveConfig, logger.child("browser"));
   const scanner = new VineScanner({
     context,
-    config,
+    config: effectiveConfig,
     logger: logger.child("scanner")
   });
 
-  logger.info(`Configured sections: ${config.sections.map((section) => section.name).join(", ")}`);
-  if (config.panicMode || config.panicUntilMs) {
-    const until = config.panicUntilMs ? new Date(config.panicUntilMs).toISOString() : "manual stop";
+  control = new TelegramControl({
+    telegram,
+    storage,
+    getConfig: () => effectiveConfig,
+    getStatus: () => runtimeStatus,
+    logger: logger.child("control")
+  });
+  if (!once) {
+    await control.start();
+  }
+
+  logger.info(`Configured sections: ${effectiveConfig.sections.map((section) => section.name).join(", ")}`);
+  if (effectiveConfig.panicMode || effectiveConfig.panicUntilMs) {
+    const until = effectiveConfig.panicUntilMs ? new Date(effectiveConfig.panicUntilMs).toISOString() : "manual stop";
     logger.info(
-      `Panic mode configured: active=${isPanicActive(config)} until=${until} ` +
-        `interval=${config.panicScanIntervalSeconds}s jitter=${config.panicScanJitterSeconds}s`
+      `Panic mode configured: active=${isPanicActive(effectiveConfig)} until=${until} ` +
+        `interval=${effectiveConfig.panicScanIntervalSeconds}s jitter=${effectiveConfig.panicScanJitterSeconds}s`
     );
   }
-  if (config.notifyAllProducts || config.notifyAllProductsWindow) {
+  if (effectiveConfig.notifyAllProducts || effectiveConfig.notifyAllProductsWindow) {
     logger.info(
-      `Notify all products configured: active=${isNotifyAllProductsActive(config)} ` +
-        `always=${config.notifyAllProducts} window=${config.notifyAllProductsWindow || "none"} ` +
-        `timezone=${config.timezoneId}`
+      `Notify all products configured: active=${isNotifyAllProductsActive(effectiveConfig)} ` +
+        `always=${effectiveConfig.notifyAllProducts} window=${effectiveConfig.notifyAllProductsWindow || "none"} ` +
+        `timezone=${effectiveConfig.timezoneId}`
     );
   }
 
   do {
+    refreshConfig();
+    scanner.config = effectiveConfig;
     try {
-      await runCycle({ scanner, storage, telegram, config, logger });
+      runtimeStatus.lastCycle = await runCycle({ scanner, storage, telegram, config: effectiveConfig, logger });
       consecutiveSessionAttentionFailures = 0;
       lastKnownGoodSessionAt = Date.now();
     } catch (error) {
       if (error instanceof SessionNeedsAttentionError) {
         let sessionAttentionConfirmed = true;
         let confirmedHealthStatus = null;
-        if (config.verifySessionAttention && error.confirmable) {
+        if (effectiveConfig.verifySessionAttention && error.confirmable) {
           try {
             const health = await scanner.verifySessionHealth();
             confirmedHealthStatus = health.status;
@@ -359,29 +325,29 @@ async function main() {
           consecutiveSessionAttentionFailures += 1;
           const now = Date.now();
           const recentGoodSeconds = secondsSince(lastKnownGoodSessionAt, now);
-          const deferSessionAttention = shouldDeferSessionAttention(error, config, lastKnownGoodSessionAt, now);
+          const deferSessionAttention = shouldDeferSessionAttention(error, effectiveConfig, lastKnownGoodSessionAt, now);
           const willStop =
-            config.stopOnSessionAttention &&
-            consecutiveSessionAttentionFailures >= config.sessionAttentionMaxFailures &&
+            effectiveConfig.stopOnSessionAttention &&
+            consecutiveSessionAttentionFailures >= effectiveConfig.sessionAttentionMaxFailures &&
             !deferSessionAttention;
 
           const sessionSummary = summarizeSessionStatus(confirmedHealthStatus || error.details);
           const baseSessionLog =
             `${error.message} consecutive_session_attention=${consecutiveSessionAttentionFailures}/` +
-            `${config.sessionAttentionMaxFailures} recent_good_session=${
+            `${effectiveConfig.sessionAttentionMaxFailures} recent_good_session=${
               recentGoodSeconds === null ? "none" : `${recentGoodSeconds}s`
             } ${sessionSummary}`;
 
           if (deferSessionAttention) {
-            nextDelayOverrideMs = Math.max(nextDelayOverrideMs, config.sessionFailureBackoffMs);
+            nextDelayOverrideMs = Math.max(nextDelayOverrideMs, effectiveConfig.sessionFailureBackoffMs);
             nextDelayReason = "session backoff";
             logger.warn(
               `${baseSessionLog}; treating as transient because a good scan happened within ` +
-                `${Math.round(config.sessionAttentionGraceMs / 1000)}s, backing off instead of stopping`
+                `${Math.round(effectiveConfig.sessionAttentionGraceMs / 1000)}s, backing off instead of stopping`
             );
           } else {
             if (!willStop) {
-              nextDelayOverrideMs = Math.max(nextDelayOverrideMs, config.sessionFailureBackoffMs);
+              nextDelayOverrideMs = Math.max(nextDelayOverrideMs, effectiveConfig.sessionFailureBackoffMs);
               nextDelayReason = "session backoff";
               logger.error(`${baseSessionLog}; backing off before retry`);
             } else {
@@ -391,14 +357,14 @@ async function main() {
 
           if (
             !deferSessionAttention &&
-            config.notifyCriticalErrors &&
-            (willStop || Date.now() - lastSessionAttentionNotificationAt > config.sessionAttentionCooldownMs)
+            effectiveConfig.notifyCriticalErrors &&
+            (willStop || Date.now() - lastSessionAttentionNotificationAt > effectiveConfig.sessionAttentionCooldownMs)
           ) {
             lastSessionAttentionNotificationAt = Date.now();
             await telegram
               .sendSessionAttention(error, {
                 failureCount: consecutiveSessionAttentionFailures,
-                maxFailures: config.sessionAttentionMaxFailures,
+                maxFailures: effectiveConfig.sessionAttentionMaxFailures,
                 willStop
               })
               .catch((telegramError) => {
@@ -416,7 +382,10 @@ async function main() {
         logger.info("Scan interrupted by shutdown");
       } else {
         logger.error(error);
-        if (config.notifyCriticalErrors && Date.now() - lastCriticalNotificationAt > config.criticalNotificationCooldownMs) {
+        if (
+          effectiveConfig.notifyCriticalErrors &&
+          Date.now() - lastCriticalNotificationAt > effectiveConfig.criticalNotificationCooldownMs
+        ) {
           lastCriticalNotificationAt = Date.now();
           await telegram.sendCriticalError(error).catch((telegramError) => {
             logger.warn(`Critical Telegram notification failed: ${telegramError.message}`);
@@ -429,9 +398,11 @@ async function main() {
       break;
     }
 
-    const waitMs = nextDelayOverrideMs > 0 ? nextDelayOverrideMs : nextScanDelayMs(config);
+    refreshConfig();
+    scanner.config = effectiveConfig;
+    const waitMs = nextDelayOverrideMs > 0 ? nextDelayOverrideMs : nextScanDelayMs(effectiveConfig);
     const waitReason =
-      nextDelayOverrideMs > 0 ? ` (${nextDelayReason})` : isPanicActive(config) ? " (panic mode)" : "";
+      nextDelayOverrideMs > 0 ? ` (${nextDelayReason})` : isPanicActive(effectiveConfig) ? " (panic mode)" : "";
     nextDelayOverrideMs = 0;
     nextDelayReason = "";
     logger.info(`Next scan in ${Math.round(waitMs / 1000)}s${waitReason}`);
@@ -440,6 +411,9 @@ async function main() {
 
   if (context) {
     await context.close();
+  }
+  if (control) {
+    control.stop();
   }
   storage.close();
 }

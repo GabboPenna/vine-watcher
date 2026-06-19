@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { loadConfig } = require("../src/config");
+const { helpMessage, parseCommand, TelegramControl } = require("../src/control");
 const {
   isNotifyAllProductsActive,
   isTimeWindowActive,
@@ -13,6 +14,7 @@ const {
   runCycle,
   shouldDeferSessionAttention
 } = require("../src/index");
+const { applyRuntimeSettings } = require("../src/runtime-config");
 const { classifySessionStatus } = require("../src/scanner");
 const { scoreProduct } = require("../src/scorer");
 const { ProductStorage } = require("../src/storage");
@@ -46,6 +48,8 @@ function testUrlCanonicalization() {
 
 function testScoringAndTriggers() {
   const config = loadConfig({
+    notifyAllProducts: false,
+    notifyAllProductsWindow: "",
     minScoreToNotify: 20,
     minValueToNotifyEur: 35,
     strictNotifyMode: true,
@@ -193,6 +197,32 @@ function testNotifyAllProductWindow() {
   );
 }
 
+function testRuntimeSettings() {
+  const baseConfig = loadConfig({
+    notifyAllProducts: false,
+    notifyAllProductsWindow: "",
+    minScoreToNotify: 20,
+    minValueToNotifyEur: 50,
+    telegramControlLanguage: "en",
+    panicScanIntervalSeconds: 10
+  });
+  const config = applyRuntimeSettings(baseConfig, {
+    notify_all_products: "true",
+    notify_all_products_window: "09:00-22:30",
+    min_score_to_notify: "5",
+    min_value_to_notify_eur: "35",
+    control_language: "it",
+    panic_scan_interval_seconds: "2"
+  });
+
+  assert.equal(config.notifyAllProducts, true);
+  assert.equal(config.notifyAllProductsWindow, "09:00-22:30");
+  assert.equal(config.minScoreToNotify, 5);
+  assert.equal(config.minValueToNotifyEur, 35);
+  assert.equal(config.telegramControlLanguage, "it");
+  assert.equal(config.panicScanIntervalSeconds, 5);
+}
+
 function testStorageEstimatedValue() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vine-watcher-test-"));
   const dbPath = path.join(dir, "products.sqlite");
@@ -223,8 +253,132 @@ function testStorageEstimatedValue() {
     null
   );
 
+  storage.setSetting("min_score_to_notify", "5");
+  assert.equal(storage.getSetting("min_score_to_notify"), "5");
+  assert.deepEqual(storage.getSettings().min_score_to_notify, "5");
+  storage.deleteSetting("min_score_to_notify");
+  assert.equal(storage.getSetting("min_score_to_notify", "fallback"), "fallback");
+
   storage.close();
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+async function testTelegramControlCommands() {
+  const settings = {};
+  const sentMessages = [];
+  const fakeStorage = {
+    getSettings() {
+      return { ...settings };
+    },
+    getSetting(key, fallback = "") {
+      return settings[key] === undefined ? fallback : settings[key];
+    },
+    setSetting(key, value) {
+      settings[key] = String(value);
+    },
+    deleteSetting(key) {
+      delete settings[key];
+    }
+  };
+  const fakeTelegram = {
+    enabled: true,
+    async getUpdates() {
+      return [];
+    },
+    async sendText(text) {
+      sentMessages.push(text);
+      return true;
+    }
+  };
+  const control = new TelegramControl({
+    telegram: fakeTelegram,
+    storage: fakeStorage,
+    getConfig: () =>
+      applyRuntimeSettings(
+        loadConfig({
+          telegramChatId: "123",
+          telegramControlEnabled: true,
+          telegramControlLanguage: "it",
+          notifyAllProducts: false,
+          notifyAllProductsWindow: "",
+          minScoreToNotify: 20,
+          minValueToNotifyEur: 50,
+          strictNotifyMode: true,
+          strictMinPositiveSignals: 2,
+          strictMaxNegativeSignals: 0,
+          maxNotificationsPerCycle: 5,
+          panicMode: false,
+          panicUntilMs: 0,
+          panicScanIntervalSeconds: 10,
+          panicScanJitterSeconds: 3,
+          scanIntervalSeconds: 30,
+          scanJitterSeconds: 10,
+          pageTimeoutMs: 45000,
+          productReadyTimeoutMs: 5000,
+          pageSettleMs: 1000,
+          sectionDelayMs: 1000
+        }),
+        settings
+      ),
+    getStatus: () => ({
+      lastCycle: {
+        scanned: 2,
+        newProducts: 1,
+        notified: 1,
+        maxScore: 25,
+        elapsedSeconds: "1.5"
+      }
+    }),
+    logger: silentLogger
+  });
+
+  assert.deepEqual(parseCommand("/status@MyBot now"), {
+    command: "/status",
+    args: ["now"]
+  });
+  assert.match(helpMessage("it"), /Comandi principali/);
+  assert.match(await control.executeCommand("/help"), /Vine Watcher Control/);
+  assert.match(await control.executeCommand("/status"), /Ultimo ciclo/);
+
+  assert.match(await control.executeCommand("/lang en"), /Language set/);
+  assert.equal(settings.control_language, "en");
+  assert.match(await control.executeCommand("/notify_all on"), /notify_all_products=true/);
+  assert.equal(settings.notify_all_products, "true");
+  assert.match(await control.executeCommand("/notify_all_window 09:00-22:30"), /09:00-22:30/);
+  assert.equal(settings.notify_all_products_window, "09:00-22:30");
+  assert.match(await control.executeCommand("/min_score 5"), /min_score_to_notify=5/);
+  assert.equal(settings.min_score_to_notify, "5");
+  assert.match(await control.executeCommand("/min_value 35"), /min_value_to_notify_eur=35/);
+  assert.equal(settings.min_value_to_notify_eur, "35");
+  assert.match(await control.executeCommand("/strict_signals 3 1"), /strict_min_positive_signals=3/);
+  assert.equal(settings.strict_min_positive_signals, "3");
+  assert.equal(settings.strict_max_negative_signals, "1");
+  assert.match(await control.executeCommand("/fast on"), /fast profile on/);
+  assert.equal(settings.panic_mode, "true");
+  assert.equal(settings.panic_scan_interval_seconds, "5");
+  assert.match(await control.executeCommand("/reset notify_all_window"), /reset/);
+  assert.equal(settings.notify_all_products_window, undefined);
+  assert.match(await control.executeCommand("/reset min_score_to_notify"), /reset/);
+  assert.equal(settings.min_score_to_notify, undefined);
+
+  await control.handleUpdate({
+    update_id: 10,
+    message: {
+      chat: { id: 999 },
+      text: "/status"
+    }
+  });
+  assert.equal(sentMessages.length, 0);
+
+  await control.handleUpdate({
+    update_id: 11,
+    message: {
+      chat: { id: 123 },
+      text: "/config"
+    }
+  });
+  assert.equal(sentMessages.length, 1);
+  assert.match(sentMessages[0], /Effective configuration/);
 }
 
 function testTelegramFormatting() {
@@ -403,7 +557,7 @@ async function testRunCycleNotifiesAfterEachSection() {
     }
   };
 
-  await runCycle({
+  const summary = await runCycle({
     scanner,
     storage,
     telegram,
@@ -412,6 +566,20 @@ async function testRunCycleNotifiesAfterEachSection() {
   });
 
   assert.deepEqual(events, ["scan:First", "save:Low score product", "notify:1", "mark:1", "scan:Second"]);
+  assert.deepEqual(
+    {
+      scanned: summary.scanned,
+      newProducts: summary.newProducts,
+      notified: summary.notified,
+      maxScore: summary.maxScore
+    },
+    {
+      scanned: 1,
+      newProducts: 1,
+      notified: 1,
+      maxScore: 0
+    }
+  );
 }
 
 async function main() {
@@ -419,7 +587,9 @@ async function main() {
   testUrlCanonicalization();
   testScoringAndTriggers();
   testNotifyAllProductWindow();
+  testRuntimeSettings();
   testStorageEstimatedValue();
+  await testTelegramControlCommands();
   testTelegramFormatting();
   testSessionStatusClassification();
   testSessionAttentionDeferral();

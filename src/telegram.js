@@ -135,6 +135,19 @@ class TelegramClient {
     return true;
   }
 
+  async getUpdates(options = {}) {
+    const payload = {
+      timeout: options.timeout || 0,
+      allowed_updates: ["message"]
+    };
+
+    if (options.offset !== undefined && options.offset !== null) {
+      payload.offset = options.offset;
+    }
+
+    return this.request("getUpdates", payload);
+  }
+
   async sendCriticalError(error) {
     const message = [
       "Vine Watcher needs attention",

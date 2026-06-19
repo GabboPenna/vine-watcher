@@ -13,6 +13,9 @@ For Docker Compose, the same `.env` file is passed to the watcher container.
 ```bash
 TELEGRAM_BOT_TOKEN=123456:ABCDEF
 TELEGRAM_CHAT_ID=123456789
+TELEGRAM_CONTROL_ENABLED=false
+TELEGRAM_CONTROL_POLL_SECONDS=3
+TELEGRAM_CONTROL_LANGUAGE=en
 ```
 
 Create a bot with BotFather, send it at least one message, then fetch updates:
@@ -24,6 +27,51 @@ curl "https://api.telegram.org/bot<TOKEN>/getUpdates"
 Use the `chat.id` value.
 
 Never commit real tokens.
+
+## Telegram Control
+
+Telegram Control is optional. It lets you change runtime settings from the same private chat used for notifications:
+
+```bash
+TELEGRAM_CONTROL_ENABLED=true
+TELEGRAM_CONTROL_POLL_SECONDS=3
+TELEGRAM_CONTROL_LANGUAGE=en
+```
+
+The control loop uses Telegram long polling. You do not need a webhook, public URL, open port, reverse proxy, or TLS certificate.
+
+Security behavior:
+
+- only messages from `TELEGRAM_CHAT_ID` are accepted
+- runtime overrides are stored in the local SQLite database
+- secrets stay in `.env`
+- commands never request or order Vine products
+
+Commands:
+
+```text
+/help
+/lang it|en
+/status
+/config
+/notify_all on|off
+/notify_all_window 09:00-22:30
+/notify_all_window off
+/min_score 5
+/min_value 35
+/strict on|off
+/strict_signals 2 0
+/max_notifications 10
+/panic on|off
+/panic 30
+/panic_interval 5 0
+/scan_interval 30 10
+/fast on|off
+/reset key
+/reset all
+```
+
+Runtime overrides are applied before every scan cycle. Use `/reset all` to return to the `.env` defaults.
 
 ## Vine Sections
 

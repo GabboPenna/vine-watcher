@@ -16,6 +16,7 @@ This project uses semantic versioning.
 
 - Added `NOTIFY_ALL_PRODUCTS=true` to notify every unnotified product regardless of score filters.
 - Added `NOTIFY_ALL_PRODUCTS_WINDOW=HH:MM-HH:MM` to schedule notify-all mode during a local daily time window.
+- Added optional Telegram Control with `/help`, `/status`, `/config`, runtime filters, speed profiles, panic mode, and Italian/English command help.
 
 ## [0.2.0] - 2026-06-17
 
