@@ -111,6 +111,7 @@ WAIT_FOR_NETWORK_IDLE=false
 PRODUCT_READY_TIMEOUT_SECONDS=5
 PAGE_SETTLE_SECONDS=1
 SECTION_DELAY_SECONDS=1
+BROWSER_RESTART_INTERVAL_MINUTES=180
 BLOCK_RESOURCE_TYPES=font,media
 ```
 
@@ -140,6 +141,8 @@ BLOCK_RESOURCE_TYPES=image,font,media
 ```
 
 This profile scans much more often and blocks product images for speed. It is useful for a private instance you actively watch, but the default profile is more conservative.
+
+`BROWSER_RESTART_INTERVAL_MINUTES` closes and reopens the Chromium context periodically while keeping the persistent browser profile. This helps long-running small hosts release Chromium memory before it grows into an OOM condition. Set it to `0` to disable automatic browser recycling.
 
 ## Notifications
 

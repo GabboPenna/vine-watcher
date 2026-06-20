@@ -206,6 +206,8 @@ async function main() {
   let effectiveConfig = baseConfig;
   let control = null;
   let context = null;
+  let scanner = null;
+  let browserStartedAt = 0;
   let shuttingDown = false;
   let lastCriticalNotificationAt = 0;
   let lastSessionAttentionNotificationAt = 0;
@@ -217,6 +219,36 @@ async function main() {
   function refreshConfig() {
     effectiveConfig = applyRuntimeSettings(baseConfig, storage.getSettings());
     return effectiveConfig;
+  }
+
+  function shouldRestartBrowser(config, now = Date.now()) {
+    return Boolean(
+      config.browserRestartIntervalMs > 0 &&
+        browserStartedAt > 0 &&
+        now - browserStartedAt >= config.browserRestartIntervalMs
+    );
+  }
+
+  async function openBrowserContext(reason) {
+    if (context) {
+      logger.info(`Closing Chromium context before reopening (${reason})`);
+      await context.close().catch((error) => logger.warn(`Browser close failed: ${error.message}`));
+      context = null;
+    }
+
+    refreshConfig();
+    context = await createBrowserContext(effectiveConfig, logger.child("browser"));
+    browserStartedAt = Date.now();
+    scanner = new VineScanner({
+      context,
+      config: effectiveConfig,
+      logger: logger.child("scanner")
+    });
+    logger.info(
+      `Chromium context ready (${reason}); recycle_interval=${Math.round(
+        effectiveConfig.browserRestartIntervalMs / 60000
+      )}m`
+    );
   }
 
   async function shutdown(signal, exitCode = 0) {
@@ -250,12 +282,7 @@ async function main() {
 
   storage.init();
   refreshConfig();
-  context = await createBrowserContext(effectiveConfig, logger.child("browser"));
-  const scanner = new VineScanner({
-    context,
-    config: effectiveConfig,
-    logger: logger.child("scanner")
-  });
+  await openBrowserContext("startup");
 
   control = new TelegramControl({
     telegram,
@@ -399,7 +426,12 @@ async function main() {
     }
 
     refreshConfig();
-    scanner.config = effectiveConfig;
+    if (shouldRestartBrowser(effectiveConfig)) {
+      const ageMinutes = Math.round((Date.now() - browserStartedAt) / 60000);
+      await openBrowserContext(`scheduled recycle after ${ageMinutes}m`);
+    } else {
+      scanner.config = effectiveConfig;
+    }
     const waitMs = nextDelayOverrideMs > 0 ? nextDelayOverrideMs : nextScanDelayMs(effectiveConfig);
     const waitReason =
       nextDelayOverrideMs > 0 ? ` (${nextDelayReason})` : isPanicActive(effectiveConfig) ? " (panic mode)" : "";

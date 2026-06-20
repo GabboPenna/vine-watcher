@@ -19,6 +19,7 @@ This project uses semantic versioning.
 - Added optional Telegram Control with `/help`, `/status`, `/config`, runtime filters, speed profiles, panic mode, and Italian/English command help.
 - Added a Telegram native command menu and `/menu` inline button control panel for common runtime actions.
 - Made Telegram Control responses friendlier, clearer, and easier to scan with human-readable labels and lightweight emoji.
+- Added scheduled Chromium context recycling with `BROWSER_RESTART_INTERVAL_MINUTES` to reduce long-running browser memory growth.
 
 ## [0.2.0] - 2026-06-17
 
