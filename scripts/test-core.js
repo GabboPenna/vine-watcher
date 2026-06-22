@@ -447,6 +447,29 @@ async function testTelegramControlCommands() {
   assert.equal(editedMessages.length, 2);
   assert.match(editedMessages[1].text, /Vine Watcher status/);
   assert.ok(editedMessages[1].options.reply_markup.inline_keyboard.length > 0);
+
+  const sentBeforeUnchangedEdit = sentMessages.length;
+  const editedBeforeUnchangedEdit = editedMessages.length;
+  fakeTelegram.editText = async () => {
+    throw new Error(
+      "Telegram editMessageText failed: Bad Request: message is not modified: " +
+        "specified new message content and reply markup are exactly the same"
+    );
+  };
+  await control.handleUpdate({
+    update_id: 15,
+    callback_query: {
+      id: "callback-3",
+      data: "vw:menu",
+      message: {
+        message_id: 44,
+        chat: { id: 123 }
+      }
+    }
+  });
+  assert.equal(sentMessages.length, sentBeforeUnchangedEdit);
+  assert.equal(editedMessages.length, editedBeforeUnchangedEdit);
+  assert.equal(answeredCallbacks[2].id, "callback-3");
 }
 
 function testTelegramFormatting() {

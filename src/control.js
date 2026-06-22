@@ -143,6 +143,11 @@ function seconds(valueMs) {
   return `${Math.round(Number(valueMs || 0) / 1000)}s`;
 }
 
+function isTelegramMessageNotModified(error) {
+  const message = String(error && error.message ? error.message : error).toLowerCase();
+  return message.includes("message is not modified") || message.includes("message not modified");
+}
+
 function formatWindow(value, language) {
   return value || (language === "it" ? "nessuna" : "none");
 }
@@ -489,6 +494,12 @@ class TelegramControl {
         await this.telegram.editText(chatId, messageId, text, options);
         return;
       } catch (error) {
+        if (isTelegramMessageNotModified(error)) {
+          if (this.logger.debug) {
+            this.logger.debug("Telegram menu edit skipped because message is unchanged");
+          }
+          return;
+        }
         this.logger.warn(`Telegram menu edit failed, sending a new message: ${error.message}`);
       }
     }
