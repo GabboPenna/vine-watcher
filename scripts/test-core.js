@@ -15,7 +15,7 @@ const {
   shouldDeferSessionAttention
 } = require("../src/index");
 const { applyRuntimeSettings } = require("../src/runtime-config");
-const { classifySessionStatus } = require("../src/scanner");
+const { classifySessionStatus, VineScanner } = require("../src/scanner");
 const { scoreProduct } = require("../src/scorer");
 const { ProductStorage } = require("../src/storage");
 const { TelegramClient } = require("../src/telegram");
@@ -223,6 +223,78 @@ function testRuntimeSettings() {
   assert.equal(config.panicScanIntervalSeconds, 5);
 }
 
+function testExternalScoringRules() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vine-watcher-rules-"));
+  const previousPath = process.env.SCORING_RULES_PATH;
+  const previousJson = process.env.SCORING_RULES_JSON;
+
+  try {
+    const rulesPath = path.join(dir, "rules.yml");
+    fs.writeFileSync(
+      rulesPath,
+      [
+        "append:",
+        "  positiveKeywordsHigh:",
+        "    - custom-widget",
+        "  smartHomeKeywords:",
+        "    - thread border router"
+      ].join("\n"),
+      "utf8"
+    );
+    process.env.SCORING_RULES_PATH = rulesPath;
+    delete process.env.SCORING_RULES_JSON;
+
+    const yamlConfig = loadConfig();
+    assert.equal(yamlConfig.scoringRulesLoaded, true);
+    assert.ok(yamlConfig.keywords.positiveKeywordsHigh.includes("custom-widget"));
+    assert.ok(yamlConfig.keywords.smartHomeKeywords.includes("thread border router"));
+
+    process.env.SCORING_RULES_JSON = JSON.stringify({
+      append: {
+        positiveKeywordsHigh: ["json-widget"]
+      }
+    });
+    delete process.env.SCORING_RULES_PATH;
+
+    const jsonConfig = loadConfig();
+    assert.ok(jsonConfig.keywords.positiveKeywordsHigh.includes("json-widget"));
+  } finally {
+    if (previousPath === undefined) {
+      delete process.env.SCORING_RULES_PATH;
+    } else {
+      process.env.SCORING_RULES_PATH = previousPath;
+    }
+    if (previousJson === undefined) {
+      delete process.env.SCORING_RULES_JSON;
+    } else {
+      process.env.SCORING_RULES_JSON = previousJson;
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function testScannerFixtures() {
+  const fixtures = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, "../test-fixtures/raw-products.json"), "utf8")
+  );
+  const config = loadConfig();
+  const scanner = new VineScanner({
+    context: null,
+    config,
+    logger: silentLogger
+  });
+
+  for (const fixture of fixtures) {
+    const product = scanner.normalizeProduct(fixture.raw, fixture.section);
+    const scoring = scoreProduct(product, config.keywords);
+    assert.equal(product.asin, fixture.expected.asin, fixture.name);
+    assert.equal(product.url, fixture.expected.url, fixture.name);
+    assert.equal(product.section, fixture.expected.section, fixture.name);
+    assert.equal(product.estimated_value_eur, fixture.expected.estimated_value_eur, fixture.name);
+    assert.ok(scoring.score >= fixture.expected.minimum_score, fixture.name);
+  }
+}
+
 function testStorageEstimatedValue() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vine-watcher-test-"));
   const dbPath = path.join(dir, "products.sqlite");
@@ -241,17 +313,37 @@ function testStorageEstimatedValue() {
     raw_text: "42,50\u20ac"
   };
 
-  storage.saveProduct(product, { score: 25, reasons: ["brand: bosch"] });
+  const saved = storage.saveProduct(product, { score: 25, reasons: ["brand: bosch"] }, {
+    inventoryAt: "2026-06-20T10:00:00.000Z",
+    triggers: ["score 25 >= 20"],
+    blockers: ["no blockers"],
+    configSnapshot: { minScoreToNotify: 20 },
+    decision: "candidate"
+  });
   assert.equal(
     storage.db.prepare("select estimated_value_eur from products where asin = ?").get(product.asin).estimated_value_eur,
     42.5
   );
+  assert.equal(saved.product.present_now, 1);
+  assert.equal(JSON.parse(saved.product.last_triggers_json)[0], "score 25 >= 20");
 
-  storage.saveProduct({ ...product, estimated_value_eur: null, raw_text: "" }, { score: 25, reasons: [] });
+  storage.saveProduct({ ...product, estimated_value_eur: null, raw_text: "" }, { score: 25, reasons: [] }, {
+    inventoryAt: "2026-06-20T10:01:00.000Z",
+    decision: "no_trigger"
+  });
   assert.equal(
     storage.db.prepare("select estimated_value_eur from products where asin = ?").get(product.asin).estimated_value_eur,
     null
   );
+  assert.equal(storage.markMissingProducts("2026-06-20T10:02:00.000Z"), 1);
+  assert.equal(storage.recentProducts({ mode: "gone", limit: 1 })[0].present_now, 0);
+  storage.saveProduct(product, { score: 25, reasons: ["brand: bosch"] }, {
+    inventoryAt: "2026-06-20T10:03:00.000Z",
+    decision: "candidate"
+  });
+  const reappeared = storage.searchProducts("bosch", 1)[0];
+  assert.equal(reappeared.present_now, 1);
+  assert.equal(reappeared.reappeared_count, 1);
 
   storage.setSetting("min_score_to_notify", "5");
   assert.equal(storage.getSetting("min_score_to_notify"), "5");
@@ -269,11 +361,15 @@ function testStorageEstimatedValue() {
     elapsedSeconds: "7.0",
     outcome: "sent_notifications",
     reasonNoNotifications: "sent notifications",
-    sections: [{ name: "Additional items", scanned: 2 }]
+    sections: [{ name: "Additional items", scanned: 2 }],
+    layoutWarnings: ["fixture warning"]
   });
   assert.equal(storage.recentScanCycles(1)[0].outcome, "sent_notifications");
+  assert.equal(JSON.parse(storage.recentScanCycles(1)[0].layout_warnings_json)[0], "fixture warning");
   assert.equal(storage.searchProducts("bosch", 1)[0].asin, product.asin);
   assert.equal(storage.recentProducts({ mode: "all", limit: 1 })[0].asin, product.asin);
+  const cleanup = storage.cleanup({ productDays: 1, scanCycleDays: 1, vacuum: false });
+  assert.equal(cleanup.vacuumed, false);
 
   storage.close();
   fs.rmSync(dir, { recursive: true, force: true });
@@ -719,6 +815,9 @@ async function testRunCycleNotifiesAfterEachSection() {
     }
   };
   const storage = {
+    findExisting() {
+      return null;
+    },
     saveProduct(savedProduct) {
       events.push(`save:${savedProduct.title}`);
       return {
@@ -732,6 +831,10 @@ async function testRunCycleNotifiesAfterEachSection() {
     },
     markNotified(productId) {
       events.push(`mark:${productId}`);
+    },
+    markMissingProducts() {
+      events.push("missing:0");
+      return 0;
     }
   };
   const telegram = {
@@ -749,7 +852,15 @@ async function testRunCycleNotifiesAfterEachSection() {
     logger: silentLogger
   });
 
-  assert.deepEqual(events, ["scan:First", "save:Low score product", "notify:1", "mark:1", "scan:Second"]);
+  assert.deepEqual(events, [
+    "scan:First",
+    "save:Low score product",
+    "notify:1",
+    "mark:1",
+    "save:Low score product",
+    "scan:Second",
+    "missing:0"
+  ]);
   assert.deepEqual(
     {
       scanned: summary.scanned,
@@ -772,6 +883,8 @@ async function main() {
   testScoringAndTriggers();
   testNotifyAllProductWindow();
   testRuntimeSettings();
+  testExternalScoringRules();
+  testScannerFixtures();
   testStorageEstimatedValue();
   await testTelegramControlCommands();
   testTelegramFormatting();

@@ -11,10 +11,14 @@ Vine Watcher monitors the Amazon Vine sections already available to your logged-
 
 - Watches configured Amazon Vine queues with Playwright and Chromium.
 - Stores seen products in SQLite to avoid duplicate alerts.
+- Tracks current inventory state: present, disappeared, and reappeared products.
 - Scores products with keyword, brand, category, and negative-signal rules.
+- Can load extra scoring keywords from JSON or simple YAML files.
 - Sends Telegram notifications with score, reasons, ASIN, image when available, and the Vine section URL.
 - Can be controlled from Telegram with an optional private command interface.
 - Supports estimated-value alerts when the visible Vine card exposes a value.
+- Stores notification decisions, triggers, blockers, and a safe config snapshot for debugging.
+- Includes dry-run scans, layout-health warnings, SQLite retention, and a local read-only health API.
 - Runs on Debian with systemd or with Docker Compose.
 - Uses a persistent Chromium profile created by manual login.
 - Uses headed Chromium inside a virtual display for the systemd service to reduce false Amazon login redirects.
@@ -78,6 +82,7 @@ Important defaults:
 ```bash
 SCAN_INTERVAL_SECONDS=30
 SCAN_JITTER_SECONDS=10
+ADAPTIVE_SCAN_ENABLED=false
 MIN_SCORE_TO_NOTIFY=20
 MIN_VALUE_TO_NOTIFY_EUR=50
 NOTIFY_ALL_PRODUCTS=false
@@ -85,6 +90,7 @@ NOTIFY_ALL_PRODUCTS_WINDOW=
 STRICT_NOTIFY_MODE=true
 MAX_NOTIFICATIONS_PER_CYCLE=5
 STOP_ON_SESSION_ATTENTION=true
+HEALTH_SERVER_ENABLED=false
 TELEGRAM_CONTROL_ENABLED=false
 ```
 
@@ -134,6 +140,34 @@ Diagnostic commands use the local SQLite history:
 - `/replay bosch 3` manually resends saved products to Telegram and marks them as notified.
 - `/dashboard` summarizes stored products, recent cycles, and memory guard status.
 
+## Diagnostics And Health
+
+Each saved product keeps the latest scoring decision: score, reasons, triggers, blockers, first score, present/gone/reappeared state, and a safe runtime config snapshot.
+
+Use dry-run mode to inspect what would be notified without sending Telegram messages:
+
+```bash
+npm run dry-run:once
+```
+
+Enable the local read-only health API when you want Home Assistant, Prometheus, or a simple curl check:
+
+```bash
+HEALTH_SERVER_ENABLED=true
+HEALTH_SERVER_HOST=127.0.0.1
+HEALTH_SERVER_PORT=8765
+HEALTH_SERVER_TOKEN=change-me
+```
+
+Endpoints:
+
+```text
+/health
+/metrics
+/last-cycle
+/latest-products?mode=present&limit=20
+```
+
 ## Runtime Notes
 
 The Debian systemd service uses `scripts/run-service.sh`, which can run Chromium in headed mode inside Xvfb:
@@ -151,6 +185,7 @@ Docker uses the same runtime wrapper for the watcher service, so Debian and Dock
 ```bash
 npm run start                # continuous watcher
 npm run once                 # one scan, then exit
+npm run dry-run:once         # one scan without sending Telegram notifications
 npm run login                # local visible Chromium login
 npm run test:telegram        # send Telegram test message
 npm run stats                # show SQLite stats
@@ -168,7 +203,7 @@ Published image:
 docker pull gabrielepennacchia/vine-watcher:latest
 ```
 
-Release tags are published from semver Git tags such as `v0.3.0`.
+Release tags are published from semver Git tags such as `v0.4.0`.
 
 ## Project Layout
 

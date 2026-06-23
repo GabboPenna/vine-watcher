@@ -43,7 +43,7 @@ docker compose up -d watcher
 To pin a release:
 
 ```bash
-VINE_WATCHER_IMAGE=gabrielepennacchia/vine-watcher:0.2.0 docker compose up -d watcher
+VINE_WATCHER_IMAGE=gabrielepennacchia/vine-watcher:0.4.0 docker compose up -d watcher
 ```
 
 ## Manual Amazon Login
@@ -88,6 +88,31 @@ It stores:
 - SQLite database
 - persistent Chromium profile
 
+## Health API
+
+The Compose file maps the watcher's health API to the host loopback address:
+
+```text
+127.0.0.1:8765 -> watcher:8765
+```
+
+Enable it in `.env`:
+
+```bash
+HEALTH_SERVER_ENABLED=true
+HEALTH_SERVER_HOST=0.0.0.0
+HEALTH_SERVER_PORT=8765
+HEALTH_SERVER_TOKEN=change-me
+```
+
+Then test from the Docker host:
+
+```bash
+curl -H "Authorization: Bearer change-me" http://127.0.0.1:8765/health
+```
+
+To bind a different host IP or port, set `HEALTH_BIND` and `HEALTH_SERVER_PORT` before starting Compose. Keep the default `HEALTH_BIND=127.0.0.1` unless you intentionally want to expose diagnostics outside the host.
+
 ## Useful Commands
 
 ```bash
@@ -100,7 +125,7 @@ npm run docker:login:finish
 
 ## Image Publishing
 
-The Docker workflow builds images on pushes and pull requests. It publishes to Docker Hub only when a semver tag such as `v0.2.0` is pushed.
+The Docker workflow builds images on pushes and pull requests. It publishes to Docker Hub only when a semver tag such as `v0.4.0` is pushed.
 
 Required GitHub repository secrets:
 
@@ -113,8 +138,8 @@ Optional repository variable:
 
 Release tags publish:
 
-- `0.2.0`
-- `0.2`
+- `0.4.0`
+- `0.4`
 - `0`
 - `latest`
 - `sha-<commit>`

@@ -22,9 +22,18 @@ function main() {
   console.log("Totals");
   console.table([stats.totals]);
   console.log("By section");
-  printTable(stats.bySection, ["section", "total", "notified"]);
+  printTable(stats.bySection, ["section", "total", "present", "notified"]);
   console.log("Top products");
-  printTable(stats.topProducts, ["id", "score", "estimated_value_eur", "notified", "section", "asin", "title"]);
+  printTable(stats.topProducts, [
+    "id",
+    "score",
+    "estimated_value_eur",
+    "present_now",
+    "notified",
+    "section",
+    "asin",
+    "title"
+  ]);
 
   storage.close();
 }

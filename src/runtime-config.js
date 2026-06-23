@@ -18,13 +18,24 @@ const USER_SETTING_KEYS = [
   "panic_scan_jitter_seconds",
   "scan_interval_seconds",
   "scan_jitter_seconds",
+  "adaptive_scan_enabled",
+  "adaptive_idle_after_cycles",
+  "adaptive_idle_interval_seconds",
+  "adaptive_active_cycles",
+  "adaptive_active_interval_seconds",
+  "adaptive_active_jitter_seconds",
   "page_timeout_seconds",
   "product_ready_timeout_seconds",
   "page_settle_seconds",
   "section_delay_seconds",
   "browser_restart_interval_minutes",
   "browser_memory_recycle_mb",
-  "browser_memory_recycle_cooldown_minutes"
+  "browser_memory_recycle_cooldown_minutes",
+  "layout_health_min_products",
+  "layout_health_warn_after_cycles",
+  "retention_products_days",
+  "retention_scan_cycles_days",
+  "sqlite_vacuum_interval_hours"
 ];
 
 function parseBool(value, fallback) {
@@ -115,6 +126,40 @@ function applyRuntimeSettings(baseConfig, settings = {}) {
   if (settings.scan_jitter_seconds !== undefined) {
     config.scanJitterSeconds = parseNumber(settings.scan_jitter_seconds, config.scanJitterSeconds, 0);
   }
+  if (settings.adaptive_scan_enabled !== undefined) {
+    config.adaptiveScanEnabled = parseBool(settings.adaptive_scan_enabled, config.adaptiveScanEnabled);
+  }
+  if (settings.adaptive_idle_after_cycles !== undefined) {
+    config.adaptiveIdleAfterCycles = parseNumber(
+      settings.adaptive_idle_after_cycles,
+      config.adaptiveIdleAfterCycles,
+      1
+    );
+  }
+  if (settings.adaptive_idle_interval_seconds !== undefined) {
+    config.adaptiveIdleIntervalSeconds = parseNumber(
+      settings.adaptive_idle_interval_seconds,
+      config.adaptiveIdleIntervalSeconds,
+      10
+    );
+  }
+  if (settings.adaptive_active_cycles !== undefined) {
+    config.adaptiveActiveCycles = parseNumber(settings.adaptive_active_cycles, config.adaptiveActiveCycles, 1);
+  }
+  if (settings.adaptive_active_interval_seconds !== undefined) {
+    config.adaptiveActiveIntervalSeconds = parseNumber(
+      settings.adaptive_active_interval_seconds,
+      config.adaptiveActiveIntervalSeconds,
+      5
+    );
+  }
+  if (settings.adaptive_active_jitter_seconds !== undefined) {
+    config.adaptiveActiveJitterSeconds = parseNumber(
+      settings.adaptive_active_jitter_seconds,
+      config.adaptiveActiveJitterSeconds,
+      0
+    );
+  }
   if (settings.page_timeout_seconds !== undefined) {
     config.pageTimeoutMs = parseNumber(settings.page_timeout_seconds, config.pageTimeoutMs / 1000, 5) * 1000;
   }
@@ -148,6 +193,33 @@ function applyRuntimeSettings(baseConfig, settings = {}) {
       ) *
       60 *
       1000;
+  }
+  if (settings.layout_health_min_products !== undefined) {
+    config.layoutHealthMinProducts = parseNumber(settings.layout_health_min_products, config.layoutHealthMinProducts, 0);
+  }
+  if (settings.layout_health_warn_after_cycles !== undefined) {
+    config.layoutHealthWarnAfterCycles = parseNumber(
+      settings.layout_health_warn_after_cycles,
+      config.layoutHealthWarnAfterCycles,
+      1
+    );
+  }
+  if (settings.retention_products_days !== undefined) {
+    config.retentionProductsDays = parseNumber(settings.retention_products_days, config.retentionProductsDays, 0);
+  }
+  if (settings.retention_scan_cycles_days !== undefined) {
+    config.retentionScanCyclesDays = parseNumber(
+      settings.retention_scan_cycles_days,
+      config.retentionScanCyclesDays,
+      0
+    );
+  }
+  if (settings.sqlite_vacuum_interval_hours !== undefined) {
+    config.sqliteVacuumIntervalHours = parseNumber(
+      settings.sqlite_vacuum_interval_hours,
+      config.sqliteVacuumIntervalHours,
+      0
+    );
   }
 
   config.telegramControlLanguage = normalizeLanguage(

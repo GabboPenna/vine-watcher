@@ -1,0 +1,24 @@
+[
+  {
+    "name": "vine-card-with-value",
+    "section": {
+      "name": "Additional items",
+      "url": "https://www.amazon.it/vine/vine-items?queue=encore"
+    },
+    "raw": {
+      "asin": "",
+      "asin_source": "vvp-item-tile-B002KTID3A",
+      "title": "Bosch punte trapano professionali smart",
+      "url": "/gp/product/B002KTID3A/ref=vine",
+      "image_url": "/images/I/example.jpg",
+      "raw_text": "Bosch punte trapano professionali smart\n42,50 EUR\nRichiedi prodotto"
+    },
+    "expected": {
+      "asin": "B002KTID3A",
+      "url": "https://www.amazon.it/dp/B002KTID3A",
+      "section": "Additional items",
+      "estimated_value_eur": 42.5,
+      "minimum_score": 20
+    }
+  }
+]

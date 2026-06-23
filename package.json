@@ -1,6 +1,6 @@
 {
   "name": "vine-watcher",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Local Amazon Vine watcher that sends Telegram notifications without requesting products.",
   "license": "MIT",
   "type": "commonjs",
@@ -27,6 +27,7 @@
   "scripts": {
     "start": "node src/index.js",
     "once": "node src/index.js --once",
+    "dry-run:once": "node src/index.js --once --dry-run",
     "login": "node scripts/login.js",
     "login:wait": "node scripts/login.js --wait-seconds 900",
     "login:server": "node scripts/login.js --wait-file /tmp/vine-watcher-login/done",

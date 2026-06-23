@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
 const { safeJsonParse } = require("./utils");
@@ -601,6 +602,132 @@ function parseList(value, fallback = []) {
     .filter(Boolean);
 }
 
+function normalizeKeywordList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return values
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function uniqueList(values) {
+  return Array.from(new Set(normalizeKeywordList(values)));
+}
+
+function parseSimpleYamlLists(text) {
+  const result = {};
+  let topKey = "";
+  let childKey = "";
+
+  for (const rawLine of String(text || "").split(/\r?\n/)) {
+    const withoutComment = rawLine.replace(/\s+#.*$/, "");
+    if (!withoutComment.trim()) {
+      continue;
+    }
+
+    const topMatch = withoutComment.match(/^([A-Za-z0-9_-]+):\s*$/);
+    if (topMatch) {
+      topKey = topMatch[1];
+      childKey = "";
+      if (!result[topKey]) {
+        result[topKey] = [];
+      }
+      continue;
+    }
+
+    const childMatch = withoutComment.match(/^\s{2}([A-Za-z0-9_-]+):\s*$/);
+    if (childMatch && topKey) {
+      childKey = childMatch[1];
+      if (Array.isArray(result[topKey])) {
+        result[topKey] = {};
+      }
+      if (!result[topKey][childKey]) {
+        result[topKey][childKey] = [];
+      }
+      continue;
+    }
+
+    const topArrayMatch = withoutComment.match(/^([A-Za-z0-9_-]+):\s*\[(.*)\]\s*$/);
+    if (topArrayMatch) {
+      result[topArrayMatch[1]] = topArrayMatch[2]
+        .split(",")
+        .map((item) => item.replace(/^['"]|['"]$/g, "").trim())
+        .filter(Boolean);
+      continue;
+    }
+
+    const itemMatch = withoutComment.match(/^\s*-\s*(.*?)\s*$/);
+    if (itemMatch) {
+      const value = itemMatch[1].replace(/^['"]|['"]$/g, "").trim();
+      if (value && topKey && childKey && Array.isArray(result[topKey][childKey])) {
+        result[topKey][childKey].push(value);
+      } else if (value && topKey && Array.isArray(result[topKey])) {
+        result[topKey].push(value);
+      }
+    }
+  }
+
+  return result;
+}
+
+function loadExternalRules(pathValue, jsonValue) {
+  const inlineRules = safeJsonParse(jsonValue || "", null);
+  if (inlineRules && typeof inlineRules === "object" && !Array.isArray(inlineRules)) {
+    return inlineRules;
+  }
+
+  const rulesPath = String(pathValue || "").trim();
+  if (!rulesPath) {
+    return {};
+  }
+
+  const resolvedPath = resolveProjectPath(rulesPath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`SCORING_RULES_PATH does not exist: ${resolvedPath}`);
+  }
+
+  const text = fs.readFileSync(resolvedPath, "utf8");
+  if (/\.ya?ml$/i.test(resolvedPath)) {
+    return parseSimpleYamlLists(text);
+  }
+  return safeJsonParse(text, {});
+}
+
+function mergeKeywordConfig(baseKeywords, rules) {
+  const merged = {};
+  for (const [key, value] of Object.entries(baseKeywords)) {
+    merged[key] = uniqueList(value);
+  }
+
+  if (!rules || typeof rules !== "object") {
+    return merged;
+  }
+
+  const replace = rules.replace && typeof rules.replace === "object" ? rules.replace : {};
+  const append = rules.append && typeof rules.append === "object" ? rules.append : {};
+
+  for (const [key, values] of Object.entries(replace)) {
+    if (Array.isArray(values)) {
+      merged[key] = uniqueList(values);
+    }
+  }
+
+  for (const [key, values] of Object.entries(append)) {
+    if (Array.isArray(values)) {
+      merged[key] = uniqueList([...(merged[key] || []), ...values]);
+    }
+  }
+
+  for (const [key, values] of Object.entries(rules)) {
+    if (Array.isArray(values)) {
+      merged[key] = uniqueList([...(merged[key] || []), ...values]);
+    }
+  }
+
+  return merged;
+}
+
 function resolveProjectPath(value) {
   if (path.isAbsolute(value)) {
     return value;
@@ -669,6 +796,11 @@ function loadConfig(overrides = {}) {
     parseTimestampMs(readEnv("PANIC_UNTIL", "")) ||
     (panicWindowMinutes > 0 ? Date.now() + panicWindowMinutes * 60 * 1000 : 0);
 
+  const scoringRulesPath = readEnv("SCORING_RULES_PATH", "");
+  const scoringRulesJson = readEnv("SCORING_RULES_JSON", "");
+  const externalRules = loadExternalRules(scoringRulesPath, scoringRulesJson);
+  const keywords = mergeKeywordConfig(keywordConfig, externalRules);
+
   return {
     projectRoot,
     telegramBotToken: readEnv("TELEGRAM_BOT_TOKEN", ""),
@@ -680,6 +812,12 @@ function loadConfig(overrides = {}) {
     sections: loadSections(amazonVineBaseUrl),
     scanIntervalSeconds: parseNumber(readEnv("SCAN_INTERVAL_SECONDS", "30"), 30, 10),
     scanJitterSeconds: parseNumber(readEnv("SCAN_JITTER_SECONDS", "10"), 10, 0),
+    adaptiveScanEnabled: parseBool(readEnv("ADAPTIVE_SCAN_ENABLED", "false"), false),
+    adaptiveIdleAfterCycles: parseNumber(readEnv("ADAPTIVE_IDLE_AFTER_CYCLES", "5"), 5, 1),
+    adaptiveIdleIntervalSeconds: parseNumber(readEnv("ADAPTIVE_IDLE_INTERVAL_SECONDS", "60"), 60, 10),
+    adaptiveActiveCycles: parseNumber(readEnv("ADAPTIVE_ACTIVE_CYCLES", "3"), 3, 1),
+    adaptiveActiveIntervalSeconds: parseNumber(readEnv("ADAPTIVE_ACTIVE_INTERVAL_SECONDS", "15"), 15, 5),
+    adaptiveActiveJitterSeconds: parseNumber(readEnv("ADAPTIVE_ACTIVE_JITTER_SECONDS", "3"), 3, 0),
     panicMode: parseBool(readEnv("PANIC_MODE", "false"), false),
     panicUntilMs,
     panicScanIntervalSeconds: parseNumber(readEnv("PANIC_SCAN_INTERVAL_SECONDS", "10"), 10, 5),
@@ -705,6 +843,8 @@ function loadConfig(overrides = {}) {
     browserMemoryRecycleCooldownMs:
       parseNumber(readEnv("BROWSER_MEMORY_RECYCLE_COOLDOWN_MINUTES", "10"), 10, 1) * 60 * 1000,
     blockedResourceTypes: parseList(readEnv("BLOCK_RESOURCE_TYPES", "font,media"), ["font", "media"]),
+    layoutHealthMinProducts: parseNumber(readEnv("LAYOUT_HEALTH_MIN_PRODUCTS", "0"), 0, 0),
+    layoutHealthWarnAfterCycles: parseNumber(readEnv("LAYOUT_HEALTH_WARN_AFTER_CYCLES", "3"), 3, 1),
     databasePath: resolveProjectPath(readEnv("DATABASE_PATH", "./data/vine-watcher.sqlite")),
     playwrightUserDataDir: resolveProjectPath(readEnv("PLAYWRIGHT_USER_DATA_DIR", "./data/chromium-profile")),
     logLevel: readEnv("LOG_LEVEL", "info"),
@@ -723,7 +863,16 @@ function loadConfig(overrides = {}) {
       readEnv("STOP_ON_SESSION_ATTENTION", readEnv("EXIT_ON_SESSION_ATTENTION", "true")),
       true
     ),
-    keywords: keywordConfig,
+    scoringRulesPath: scoringRulesPath ? resolveProjectPath(scoringRulesPath) : "",
+    scoringRulesLoaded: Object.keys(externalRules || {}).length > 0,
+    keywords,
+    healthServerEnabled: parseBool(readEnv("HEALTH_SERVER_ENABLED", "false"), false),
+    healthServerHost: readEnv("HEALTH_SERVER_HOST", "127.0.0.1"),
+    healthServerPort: parseNumber(readEnv("HEALTH_SERVER_PORT", "8765"), 8765, 1),
+    healthServerToken: readEnv("HEALTH_SERVER_TOKEN", ""),
+    retentionProductsDays: parseNumber(readEnv("RETENTION_PRODUCTS_DAYS", "0"), 0, 0),
+    retentionScanCyclesDays: parseNumber(readEnv("RETENTION_SCAN_CYCLES_DAYS", "30"), 30, 0),
+    sqliteVacuumIntervalHours: parseNumber(readEnv("SQLITE_VACUUM_INTERVAL_HOURS", "24"), 24, 0),
     timezoneId: readEnv("TZ", "Europe/Rome"),
     ...overrides
   };

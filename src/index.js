@@ -8,9 +8,11 @@ const { createLogger } = require("./logger");
 const {
   formatEuro,
   isNotifyAllProductsActive,
+  notificationBlockers,
   notificationTriggers
 } = require("./notification-rules");
 const { applyRuntimeSettings } = require("./runtime-config");
+const { startHealthServer } = require("./health-server");
 const { scoreProduct } = require("./scorer");
 const {
   isBrowserClosedError,
@@ -22,16 +24,43 @@ const { ProductStorage } = require("./storage");
 const { isTimeWindowActive } = require("./time-window");
 const { delayWithJitter, sleep } = require("./utils");
 const { TelegramClient } = require("./telegram");
+const { version } = require("../package.json");
 
 function isPanicActive(config) {
   return Boolean(config.panicMode || (config.panicUntilMs && Date.now() < config.panicUntilMs));
 }
 
-function nextScanDelayMs(config) {
+function nextScanDelayMs(config, adaptiveState = null) {
   if (isPanicActive(config)) {
     return delayWithJitter(config.panicScanIntervalSeconds, config.panicScanJitterSeconds);
   }
+  if (config.adaptiveScanEnabled && adaptiveState) {
+    if (adaptiveState.activeCyclesRemaining > 0) {
+      return delayWithJitter(config.adaptiveActiveIntervalSeconds, config.adaptiveActiveJitterSeconds);
+    }
+    if (adaptiveState.idleCycles >= config.adaptiveIdleAfterCycles) {
+      return delayWithJitter(config.adaptiveIdleIntervalSeconds, config.scanJitterSeconds);
+    }
+  }
   return delayWithJitter(config.scanIntervalSeconds, config.scanJitterSeconds);
+}
+
+function nextScanReason(config, adaptiveState = null, overrideReason = "") {
+  if (overrideReason) {
+    return overrideReason;
+  }
+  if (isPanicActive(config)) {
+    return "panic mode";
+  }
+  if (config.adaptiveScanEnabled && adaptiveState) {
+    if (adaptiveState.activeCyclesRemaining > 0) {
+      return "adaptive active";
+    }
+    if (adaptiveState.idleCycles >= config.adaptiveIdleAfterCycles) {
+      return "adaptive idle";
+    }
+  }
+  return "";
 }
 
 function secondsSince(timestampMs, now = Date.now()) {
@@ -93,12 +122,79 @@ function shouldDeferSessionAttention(error, config, lastKnownGoodSessionAt, now 
   return now - lastKnownGoodSessionAt < config.sessionAttentionGraceMs;
 }
 
-async function runCycle({ scanner, storage, telegram, config, logger }) {
+function safeConfigSnapshot(config) {
+  return {
+    scanIntervalSeconds: config.scanIntervalSeconds,
+    scanJitterSeconds: config.scanJitterSeconds,
+    adaptiveScanEnabled: config.adaptiveScanEnabled,
+    panicActive: isPanicActive(config),
+    notifyAllProducts: config.notifyAllProducts,
+    notifyAllProductsWindow: config.notifyAllProductsWindow,
+    minScoreToNotify: config.minScoreToNotify,
+    minValueToNotifyEur: config.minValueToNotifyEur,
+    strictNotifyMode: config.strictNotifyMode,
+    strictMinPositiveSignals: config.strictMinPositiveSignals,
+    strictMaxNegativeSignals: config.strictMaxNegativeSignals,
+    maxNotificationsPerCycle: config.maxNotificationsPerCycle,
+    scoringRulesLoaded: config.scoringRulesLoaded,
+    sections: config.sections.map((section) => section.name)
+  };
+}
+
+function layoutWarningsForSummary(summary, config, layoutHealthState = null) {
+  const warnings = [];
+  if (summary.scanned <= config.layoutHealthMinProducts) {
+    warnings.push(
+      `scanned ${summary.scanned} product(s), threshold=${config.layoutHealthMinProducts}; check Amazon layout/session`
+    );
+  }
+
+  if (layoutHealthState && layoutHealthState.lowProductCycles >= config.layoutHealthWarnAfterCycles) {
+    warnings.push(
+      `low product count repeated for ${layoutHealthState.lowProductCycles} cycle(s); selectors may need review`
+    );
+  }
+
+  return warnings;
+}
+
+function updateAdaptiveState(adaptiveState, summary, config) {
+  if (!config.adaptiveScanEnabled) {
+    adaptiveState.idleCycles = 0;
+    adaptiveState.activeCyclesRemaining = 0;
+    adaptiveState.lastReason = "";
+    return adaptiveState;
+  }
+
+  const movement =
+    Number(summary.newProducts || 0) > 0 ||
+    Number(summary.notified || 0) > 0 ||
+    Number(summary.disappearedProducts || 0) > 0;
+
+  if (movement) {
+    adaptiveState.idleCycles = 0;
+    adaptiveState.activeCyclesRemaining = config.adaptiveActiveCycles;
+    adaptiveState.lastReason = "movement";
+    return adaptiveState;
+  }
+
+  adaptiveState.idleCycles += 1;
+  adaptiveState.activeCyclesRemaining = Math.max(0, adaptiveState.activeCyclesRemaining - 1);
+  adaptiveState.lastReason =
+    adaptiveState.idleCycles >= config.adaptiveIdleAfterCycles ? "idle" : "normal";
+  return adaptiveState;
+}
+
+async function runCycle({ scanner, storage, telegram, config, logger, dryRun = false, layoutHealthState = null }) {
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
+  const inventoryAt = startedAtIso;
+  const configSnapshot = safeConfigSnapshot(config);
   let scanned = 0;
   let newProducts = 0;
   let notified = 0;
+  let dryRunMatches = 0;
+  let disappearedProducts = 0;
   let maxScore = null;
   let skippedAlreadyNotified = 0;
   let skippedNoTrigger = 0;
@@ -120,7 +216,20 @@ async function runCycle({ scanner, storage, telegram, config, logger }) {
         maxScore = scoring.score;
       }
 
-      const saved = storage.saveProduct(product, scoring);
+      const preliminaryExisting = storage.findExisting(product);
+      const preliminaryNotified = preliminaryExisting && preliminaryExisting.notified === 1;
+      const preliminaryProduct = preliminaryExisting || product;
+      const triggers = notificationTriggers(preliminaryProduct, scoring, config);
+      const blockers = notificationBlockers(preliminaryProduct, scoring, config, preliminaryNotified);
+      const hasTrigger = triggers.length > 0;
+      const preliminaryDecision = preliminaryNotified ? "already_notified" : hasTrigger ? "candidate" : "no_trigger";
+      const saved = storage.saveProduct(product, scoring, {
+        inventoryAt,
+        triggers,
+        blockers,
+        configSnapshot,
+        decision: preliminaryDecision
+      });
       if (saved.isNew) {
         newProducts += 1;
         logger.info(
@@ -129,9 +238,15 @@ async function runCycle({ scanner, storage, telegram, config, logger }) {
         );
       }
 
-      const triggers = notificationTriggers(saved.product, scoring, config);
       const shouldNotify = saved.product.notified !== 1 && triggers.length > 0;
       if (!shouldNotify) {
+        storage.saveProduct(saved.product, scoring, {
+          inventoryAt,
+          triggers,
+          blockers: notificationBlockers(saved.product, scoring, config, saved.product.notified === 1),
+          configSnapshot,
+          decision: saved.product.notified === 1 ? "already_notified" : "no_trigger"
+        });
         if (saved.product.notified === 1) {
           skippedAlreadyNotified += 1;
         } else {
@@ -142,6 +257,13 @@ async function runCycle({ scanner, storage, telegram, config, logger }) {
 
       if (notified >= config.maxNotificationsPerCycle) {
         skippedNotificationLimit += 1;
+        storage.saveProduct(saved.product, scoring, {
+          inventoryAt,
+          triggers,
+          blockers: ["notification limit reached"],
+          configSnapshot,
+          decision: "notification_limit"
+        });
         logger.warn(
           `Notification limit reached; not notifying score=${scoring.score} ` +
             `value=${formatEuro(saved.product.estimated_value_eur)} title="${product.title}"`
@@ -150,20 +272,44 @@ async function runCycle({ scanner, storage, telegram, config, logger }) {
       }
 
       try {
-        const sent = await telegram.sendProduct(saved.product, {
-          ...scoring,
-          notificationTriggers: triggers
-        });
+        const sent = dryRun
+          ? true
+          : await telegram.sendProduct(saved.product, {
+              ...scoring,
+              notificationTriggers: triggers
+            });
         if (sent) {
-          storage.markNotified(saved.product.id);
-          notified += 1;
-          logger.info(
-            `Telegram notification sent for product id=${saved.product.id} score=${scoring.score} ` +
-              `value=${formatEuro(saved.product.estimated_value_eur)} triggers="${triggers.join("; ")}"`
-          );
+          if (dryRun) {
+            dryRunMatches += 1;
+            logger.info(
+              `DRY RUN would notify product id=${saved.product.id} score=${scoring.score} ` +
+                `value=${formatEuro(saved.product.estimated_value_eur)} triggers="${triggers.join("; ")}"`
+            );
+          } else {
+            storage.markNotified(saved.product.id);
+            notified += 1;
+            logger.info(
+              `Telegram notification sent for product id=${saved.product.id} score=${scoring.score} ` +
+                `value=${formatEuro(saved.product.estimated_value_eur)} triggers="${triggers.join("; ")}"`
+            );
+          }
+          storage.saveProduct(saved.product, scoring, {
+            inventoryAt,
+            triggers,
+            blockers: ["no blockers"],
+            configSnapshot,
+            decision: dryRun ? "dry_run_would_notify" : "notified"
+          });
         }
       } catch (error) {
         telegramFailures += 1;
+        storage.saveProduct(saved.product, scoring, {
+          inventoryAt,
+          triggers,
+          blockers: [error.message],
+          configSnapshot,
+          decision: "telegram_failed"
+        });
         logger.error(`Telegram notification failed for product id=${saved.product.id}: ${error.message}`);
       }
     }
@@ -173,12 +319,16 @@ async function runCycle({ scanner, storage, telegram, config, logger }) {
     }
   }
 
+  disappearedProducts = storage.markMissingProducts(inventoryAt);
   const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
   let outcome = "no_notifications";
   let reasonNoNotifications = "";
   if (notified > 0) {
     outcome = "sent_notifications";
     reasonNoNotifications = "sent notifications";
+  } else if (dryRunMatches > 0) {
+    outcome = "dry_run_matches";
+    reasonNoNotifications = "dry-run found matching products";
   } else if (scanned === 0) {
     outcome = "no_products";
     reasonNoNotifications = "no products found";
@@ -196,32 +346,42 @@ async function runCycle({ scanner, storage, telegram, config, logger }) {
     reasonNoNotifications = "new products did not match notification triggers";
   }
 
-  logger.info(
-    `Cycle complete: scanned=${scanned} new=${newProducts} notified=${notified} max_score=${
-      maxScore === null ? "n/d" : maxScore
-    } elapsed=${elapsedSeconds}s outcome=${outcome}`
-  );
-
-  return {
+  const summary = {
     startedAt: startedAtIso,
     completedAt: new Date().toISOString(),
     scanned,
     newProducts,
     notified,
+    dryRunMatches,
+    disappearedProducts,
     maxScore: maxScore === null ? "n/d" : maxScore,
     elapsedSeconds,
     skippedAlreadyNotified,
     skippedNoTrigger,
     skippedNotificationLimit,
     telegramFailures,
+    dryRun,
     outcome,
     reasonNoNotifications,
     sections
   };
+  summary.layoutWarnings = layoutWarningsForSummary(summary, config, layoutHealthState);
+
+  logger.info(
+    `Cycle complete: scanned=${scanned} new=${newProducts} gone=${disappearedProducts} notified=${notified} max_score=${
+      maxScore === null ? "n/d" : maxScore
+    } elapsed=${elapsedSeconds}s outcome=${outcome}`
+  );
+  if (summary.layoutWarnings.length > 0) {
+    logger.warn(`Layout health warning: ${summary.layoutWarnings.join("; ")}`);
+  }
+
+  return summary;
 }
 
 async function main() {
   const once = process.argv.includes("--once");
+  const dryRun = process.argv.includes("--dry-run");
   const baseConfig = loadConfig();
   const logger = createLogger({ level: baseConfig.logLevel });
   const storage = new ProductStorage(baseConfig.databasePath, logger.child("storage"));
@@ -243,6 +403,16 @@ async function main() {
   let nextDelayOverrideMs = 0;
   let nextDelayReason = "";
   let lastMemoryRecycleAt = 0;
+  let lastMaintenanceAt = 0;
+  let healthServer = null;
+  const adaptiveState = {
+    idleCycles: 0,
+    activeCyclesRemaining: 0,
+    lastReason: ""
+  };
+  const layoutHealthState = {
+    lowProductCycles: 0
+  };
 
   function refreshConfig() {
     effectiveConfig = applyRuntimeSettings(baseConfig, storage.getSettings());
@@ -310,6 +480,9 @@ async function main() {
     if (control) {
       control.stop();
     }
+    if (healthServer) {
+      await new Promise((resolve) => healthServer.close(resolve)).catch(() => {});
+    }
     if (context) {
       await context.close().catch((error) => logger.warn(`Browser close failed: ${error.message}`));
     }
@@ -332,6 +505,13 @@ async function main() {
 
   storage.init();
   refreshConfig();
+  healthServer = startHealthServer({
+    config: effectiveConfig,
+    storage,
+    getStatus: () => runtimeStatus,
+    logger: logger.child("health"),
+    version
+  });
   await openBrowserContext("startup");
 
   control = new TelegramControl({
@@ -360,13 +540,30 @@ async function main() {
         `timezone=${effectiveConfig.timezoneId}`
     );
   }
+  if (dryRun) {
+    logger.warn("Dry-run mode enabled: matching products are logged but Telegram notifications are not sent");
+  }
 
   do {
     refreshConfig();
     scanner.config = effectiveConfig;
     try {
-      runtimeStatus.lastCycle = await runCycle({ scanner, storage, telegram, config: effectiveConfig, logger });
+      runtimeStatus.lastCycle = await runCycle({
+        scanner,
+        storage,
+        telegram,
+        config: effectiveConfig,
+        logger,
+        dryRun,
+        layoutHealthState
+      });
       storage.recordScanCycle(runtimeStatus.lastCycle);
+      if (runtimeStatus.lastCycle.scanned <= effectiveConfig.layoutHealthMinProducts) {
+        layoutHealthState.lowProductCycles += 1;
+      } else {
+        layoutHealthState.lowProductCycles = 0;
+      }
+      updateAdaptiveState(adaptiveState, runtimeStatus.lastCycle, effectiveConfig);
       consecutiveSessionAttentionFailures = 0;
       lastKnownGoodSessionAt = Date.now();
     } catch (error) {
@@ -477,15 +674,33 @@ async function main() {
     }
 
     refreshConfig();
+    const now = Date.now();
+    if (
+      effectiveConfig.sqliteVacuumIntervalHours > 0 &&
+      now - lastMaintenanceAt >= effectiveConfig.sqliteVacuumIntervalHours * 60 * 60 * 1000
+    ) {
+      const maintenance = storage.cleanup({
+        productDays: effectiveConfig.retentionProductsDays,
+        scanCycleDays: effectiveConfig.retentionScanCyclesDays,
+        vacuum: true
+      });
+      lastMaintenanceAt = now;
+      logger.info(
+        `SQLite maintenance complete: deleted_products=${maintenance.deletedProducts} ` +
+          `deleted_cycles=${maintenance.deletedScanCycles} vacuumed=${maintenance.vacuumed}`
+      );
+    }
+
     const recycleReason = browserRestartReason(effectiveConfig);
     if (recycleReason) {
       await openBrowserContext(recycleReason);
     } else {
       scanner.config = effectiveConfig;
     }
-    const waitMs = nextDelayOverrideMs > 0 ? nextDelayOverrideMs : nextScanDelayMs(effectiveConfig);
-    const waitReason =
-      nextDelayOverrideMs > 0 ? ` (${nextDelayReason})` : isPanicActive(effectiveConfig) ? " (panic mode)" : "";
+    const waitMs =
+      nextDelayOverrideMs > 0 ? nextDelayOverrideMs : nextScanDelayMs(effectiveConfig, adaptiveState);
+    const reason = nextScanReason(effectiveConfig, adaptiveState, nextDelayReason);
+    const waitReason = reason ? ` (${reason})` : "";
     nextDelayOverrideMs = 0;
     nextDelayReason = "";
     logger.info(`Next scan in ${Math.round(waitMs / 1000)}s${waitReason}`);
@@ -512,6 +727,8 @@ module.exports = {
   isNotifyAllProductsActive,
   isTimeWindowActive,
   notificationTriggers,
+  nextScanDelayMs,
   runCycle,
+  safeConfigSnapshot,
   shouldDeferSessionAttention
 };

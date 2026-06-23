@@ -6,9 +6,25 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.4.0] - 2026-06-23
+
+### Added
+
+- Added current inventory tracking for present, disappeared, and reappeared products.
+- Added per-product diagnostic snapshots with notification triggers, blockers, first score, latest decision, and safe runtime config.
+- Added external scoring rules through `SCORING_RULES_PATH` and `SCORING_RULES_JSON`, with JSON and simple YAML list support.
+- Added adaptive scan scheduling with active/idle intervals.
+- Added layout-health warnings when complete scan cycles keep finding too few products.
+- Added `npm run dry-run:once` to run a real scan without sending Telegram product notifications.
+- Added a local read-only health API with `/health`, `/metrics`, `/last-cycle`, and `/latest-products`.
+- Added SQLite retention and vacuum maintenance settings.
+- Added scanner fixture coverage for product normalization.
+
 ### Changed
 
 - Polished Telegram Control diagnostic messages with clearer sections, scan-friendly product rows, and friendlier emoji labels.
+- Updated Docker publishing to publish multi-arch release images for `linux/amd64` and `linux/arm64`.
+- Bumped package version to `0.4.0`.
 
 ## [0.3.0] - 2026-06-23
 

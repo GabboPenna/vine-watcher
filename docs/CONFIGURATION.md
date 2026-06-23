@@ -125,6 +125,12 @@ SECTIONS_JSON=[{"name":"Only recommended","url":"https://www.amazon.it/vine/vine
 ```bash
 SCAN_INTERVAL_SECONDS=30
 SCAN_JITTER_SECONDS=10
+ADAPTIVE_SCAN_ENABLED=false
+ADAPTIVE_IDLE_AFTER_CYCLES=5
+ADAPTIVE_IDLE_INTERVAL_SECONDS=60
+ADAPTIVE_ACTIVE_CYCLES=3
+ADAPTIVE_ACTIVE_INTERVAL_SECONDS=15
+ADAPTIVE_ACTIVE_JITTER_SECONDS=3
 PAGE_TIMEOUT_SECONDS=45
 WAIT_FOR_NETWORK_IDLE=false
 PRODUCT_READY_TIMEOUT_SECONDS=5
@@ -134,6 +140,8 @@ BROWSER_RESTART_INTERVAL_MINUTES=180
 BROWSER_MEMORY_RECYCLE_MB=0
 BROWSER_MEMORY_RECYCLE_COOLDOWN_MINUTES=10
 BLOCK_RESOURCE_TYPES=font,media
+LAYOUT_HEALTH_MIN_PRODUCTS=0
+LAYOUT_HEALTH_WARN_AFTER_CYCLES=3
 ```
 
 For aggressive short windows:
@@ -163,9 +171,29 @@ BLOCK_RESOURCE_TYPES=image,font,media
 
 This profile scans much more often and blocks product images for speed. It is useful for a private instance you actively watch, but the default profile is more conservative.
 
+Adaptive scanning can speed up briefly when the watcher sees movement and slow down after repeated idle cycles:
+
+```bash
+ADAPTIVE_SCAN_ENABLED=true
+ADAPTIVE_IDLE_AFTER_CYCLES=5
+ADAPTIVE_IDLE_INTERVAL_SECONDS=60
+ADAPTIVE_ACTIVE_CYCLES=3
+ADAPTIVE_ACTIVE_INTERVAL_SECONDS=15
+ADAPTIVE_ACTIVE_JITTER_SECONDS=3
+```
+
+Panic mode still wins over adaptive scanning. Use adaptive scanning for daily unattended operation; use panic mode for short active drop windows.
+
 `BROWSER_RESTART_INTERVAL_MINUTES` closes and reopens the Chromium context periodically while keeping the persistent browser profile. This helps long-running small hosts release Chromium memory before it grows into an OOM condition. Set it to `0` to disable automatic browser recycling.
 
 `BROWSER_MEMORY_RECYCLE_MB` is an optional Linux process-tree RSS guard. When set above `0`, Vine Watcher sums the Node/Chromium process tree memory and recycles Chromium if it crosses the configured MB threshold. `BROWSER_MEMORY_RECYCLE_COOLDOWN_MINUTES` prevents repeated recycle loops.
+
+Layout health warnings are diagnostic only. If a complete cycle keeps finding very few products, the cycle summary stores a warning so you can tell whether Amazon layout/session behavior may need review.
+
+```bash
+LAYOUT_HEALTH_MIN_PRODUCTS=0
+LAYOUT_HEALTH_WARN_AFTER_CYCLES=3
+```
 
 ## Notifications
 
@@ -185,6 +213,48 @@ Set `NOTIFY_ALL_PRODUCTS=true` to notify every unnotified product the watcher se
 Set `NOTIFY_ALL_PRODUCTS_WINDOW=09:00-22:30` to enable notify-all only during a local daily time window. The configured `TZ` value is used, defaults to `Europe/Rome`, and the end time is exclusive. Overnight windows such as `22:00-06:00` are supported.
 
 The value override bypasses strict score filtering. If a product has a visible estimated value greater than or equal to `MIN_VALUE_TO_NOTIFY_EUR`, it is notified.
+
+## Scoring Rules
+
+Built-in keywords live in `src/config.js`, but you can add or replace scoring lists without editing JavaScript:
+
+```bash
+SCORING_RULES_PATH=./data/scoring-rules.yml
+SCORING_RULES_JSON=
+```
+
+JSON example:
+
+```json
+{
+  "append": {
+    "positiveKeywordsHigh": ["custom-widget"],
+    "smartHomeKeywords": ["thread border router"]
+  },
+  "replace": {
+    "negativeKeywords": ["costume", "party"]
+  }
+}
+```
+
+Simple YAML example:
+
+```yaml
+append:
+  positiveKeywordsHigh:
+    - custom-widget
+  smartHomeKeywords:
+    - thread border router
+```
+
+Top-level arrays are also treated as append rules:
+
+```yaml
+positiveKeywordsHigh:
+  - garage sensor
+```
+
+The supported keys are the same keyword arrays used by the scorer, such as `positiveKeywordsHigh`, `brandKeywords`, `smartHomeKeywords`, `homeApplianceKeywords`, `negativeKeywords`, and `nicheReplacementKeywords`.
 
 ## Session Health
 
@@ -217,9 +287,63 @@ STOP_ON_SESSION_ATTENTION=false
 ```bash
 DATABASE_PATH=./data/vine-watcher.sqlite
 PLAYWRIGHT_USER_DATA_DIR=./data/chromium-profile
+RETENTION_PRODUCTS_DAYS=0
+RETENTION_SCAN_CYCLES_DAYS=30
+SQLITE_VACUUM_INTERVAL_HOURS=24
 ```
 
 The Chromium profile is local runtime state. Do not commit it.
+
+The database stores product history plus current inventory state:
+
+- `present_now=1`: seen in the latest complete inventory cycle
+- `present_now=0`: previously seen but not present anymore
+- `reappeared_count`: how many times a gone product came back
+- `last_triggers_json`, `last_blockers_json`, `last_config_json`, `last_decision`: diagnostic snapshot from the latest scan
+
+Retention only deletes old gone products when `RETENTION_PRODUCTS_DAYS` is greater than `0`. Scan-cycle history is kept for `RETENTION_SCAN_CYCLES_DAYS`, default 30 days. SQLite vacuum runs on the configured maintenance interval.
+
+## Health API
+
+The health API is local and read-only. It is disabled by default.
+
+```bash
+HEALTH_SERVER_ENABLED=false
+HEALTH_SERVER_HOST=127.0.0.1
+HEALTH_SERVER_PORT=8765
+HEALTH_SERVER_TOKEN=
+```
+
+When `HEALTH_SERVER_TOKEN` is set, use either:
+
+```bash
+curl -H "Authorization: Bearer change-me" http://127.0.0.1:8765/health
+```
+
+or:
+
+```bash
+curl "http://127.0.0.1:8765/health?token=change-me"
+```
+
+Endpoints:
+
+```text
+/health                         JSON health, last cycle, memory, and totals
+/metrics                        Prometheus-style text metrics
+/last-cycle                     latest cycle plus recent scan-cycle history
+/latest-products?mode=present   recent products; modes include all, present, gone, notified, unnotified, top
+```
+
+Home Assistant can read `/health` with a REST sensor or `/metrics` through a Prometheus integration.
+
+## Dry Run
+
+```bash
+npm run dry-run:once
+```
+
+Dry-run performs one real scan and records product diagnostics, but does not send Telegram product notifications and does not mark products as notified. It is useful after changing rules, thresholds, sections, or scheduler settings.
 
 ## Browser Mode
 
