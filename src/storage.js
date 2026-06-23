@@ -62,6 +62,23 @@ class ProductStorage {
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS scan_cycles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        scanned INTEGER NOT NULL DEFAULT 0,
+        new_products INTEGER NOT NULL DEFAULT 0,
+        notified INTEGER NOT NULL DEFAULT 0,
+        max_score INTEGER,
+        duration_seconds REAL NOT NULL DEFAULT 0,
+        outcome TEXT NOT NULL DEFAULT '',
+        reason_no_notifications TEXT NOT NULL DEFAULT '',
+        sections_json TEXT NOT NULL DEFAULT '[]'
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_scan_cycles_completed_at ON scan_cycles(completed_at);
+      CREATE INDEX IF NOT EXISTS idx_scan_cycles_outcome ON scan_cycles(outcome);
     `);
     this.migrate();
     this.prepareStatements();
@@ -148,6 +165,32 @@ class ProductStorage {
     `);
 
     this.deleteSettingStatement = this.db.prepare("DELETE FROM settings WHERE key = ?");
+
+    this.insertScanCycleStatement = this.db.prepare(`
+      INSERT INTO scan_cycles (
+        started_at,
+        completed_at,
+        scanned,
+        new_products,
+        notified,
+        max_score,
+        duration_seconds,
+        outcome,
+        reason_no_notifications,
+        sections_json
+      ) VALUES (
+        @started_at,
+        @completed_at,
+        @scanned,
+        @new_products,
+        @notified,
+        @max_score,
+        @duration_seconds,
+        @outcome,
+        @reason_no_notifications,
+        @sections_json
+      )
+    `);
   }
 
   findExisting(product) {
@@ -247,6 +290,93 @@ class ProductStorage {
 
   deleteSetting(key) {
     this.deleteSettingStatement.run(String(key));
+  }
+
+  recordScanCycle(summary) {
+    if (!summary) {
+      return;
+    }
+
+    const maxScore = Number(summary.maxScore);
+    this.insertScanCycleStatement.run({
+      started_at: summary.startedAt || nowIso(),
+      completed_at: summary.completedAt || nowIso(),
+      scanned: Number(summary.scanned || 0),
+      new_products: Number(summary.newProducts || 0),
+      notified: Number(summary.notified || 0),
+      max_score: Number.isFinite(maxScore) ? maxScore : null,
+      duration_seconds: Number(summary.elapsedSeconds || 0),
+      outcome: String(summary.outcome || ""),
+      reason_no_notifications: String(summary.reasonNoNotifications || ""),
+      sections_json: JSON.stringify(summary.sections || [])
+    });
+  }
+
+  recentScanCycles(limit = 5) {
+    return this.db
+      .prepare(
+        `SELECT id, started_at, completed_at, scanned, new_products, notified, max_score,
+                duration_seconds, outcome, reason_no_notifications, sections_json
+         FROM scan_cycles
+         ORDER BY completed_at DESC
+         LIMIT ?`
+      )
+      .all(Math.max(1, Math.min(50, Number(limit) || 5)));
+  }
+
+  searchProducts(query, limit = 5) {
+    const term = String(query || "").trim().toLowerCase();
+    if (!term) {
+      return [];
+    }
+
+    const like = `%${term}%`;
+    return this.db
+      .prepare(
+        `SELECT id, asin, title, normalized_title, url, section_url, image_url, section, estimated_value_eur,
+                first_seen_at, last_seen_at, score, reasons_json, notified, raw_text
+         FROM products
+         WHERE lower(title) LIKE @like
+            OR lower(normalized_title) LIKE @like
+            OR lower(asin) = @term
+            OR lower(raw_text) LIKE @like
+         ORDER BY last_seen_at DESC, score DESC
+         LIMIT @limit`
+      )
+      .all({
+        like,
+        term,
+        limit: Math.max(1, Math.min(20, Number(limit) || 5))
+      });
+  }
+
+  recentProducts({ limit = 10, mode = "all" } = {}) {
+    const safeLimit = Math.max(1, Math.min(50, Number(limit) || 10));
+    const clauses = {
+      all: "",
+      notified: "WHERE notified = 1",
+      unnotified: "WHERE notified != 1",
+      ignored: "WHERE notified != 1",
+      top: ""
+    };
+    const order =
+      mode === "top"
+        ? "ORDER BY score DESC, estimated_value_eur DESC, last_seen_at DESC"
+        : mode === "ignored"
+          ? "ORDER BY score ASC, last_seen_at DESC"
+          : "ORDER BY last_seen_at DESC";
+    const where = clauses[mode] === undefined ? clauses.all : clauses[mode];
+
+    return this.db
+      .prepare(
+        `SELECT id, asin, title, normalized_title, url, section_url, image_url, section, estimated_value_eur,
+                first_seen_at, last_seen_at, score, reasons_json, notified, raw_text
+         FROM products
+         ${where}
+         ${order}
+         LIMIT ?`
+      )
+      .all(safeLimit);
   }
 
   getStats() {

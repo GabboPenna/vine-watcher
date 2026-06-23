@@ -1,9 +1,15 @@
 "use strict";
 
+const fs = require("fs");
 const { createBrowserContext } = require("./browser");
 const { loadConfig } = require("./config");
 const { TelegramControl } = require("./control");
 const { createLogger } = require("./logger");
+const {
+  formatEuro,
+  isNotifyAllProductsActive,
+  notificationTriggers
+} = require("./notification-rules");
 const { applyRuntimeSettings } = require("./runtime-config");
 const { scoreProduct } = require("./scorer");
 const {
@@ -13,7 +19,7 @@ const {
   VineScanner
 } = require("./scanner");
 const { ProductStorage } = require("./storage");
-const { isTimeWindowActive, parseTimeWindow } = require("./time-window");
+const { isTimeWindowActive } = require("./time-window");
 const { delayWithJitter, sleep } = require("./utils");
 const { TelegramClient } = require("./telegram");
 
@@ -35,6 +41,48 @@ function secondsSince(timestampMs, now = Date.now()) {
   return Math.max(0, Math.round((now - timestampMs) / 1000));
 }
 
+function readTextFile(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (_error) {
+    return "";
+  }
+}
+
+function processChildren(pid) {
+  const text = readTextFile(`/proc/${pid}/task/${pid}/children`).trim();
+  if (!text) {
+    return [];
+  }
+  return text
+    .split(/\s+/)
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0);
+}
+
+function processRssKb(pid) {
+  const status = readTextFile(`/proc/${pid}/status`);
+  const match = status.match(/^VmRSS:\s+(\d+)\s+kB/im);
+  return match ? Number(match[1]) : 0;
+}
+
+function processTreeRssMb(pid = process.pid, visited = new Set()) {
+  if (visited.has(pid)) {
+    return 0;
+  }
+  visited.add(pid);
+
+  let totalKb = processRssKb(pid);
+  for (const childPid of processChildren(pid)) {
+    totalKb += processTreeRssMb(childPid, visited) * 1024;
+  }
+
+  if (pid === process.pid && totalKb === 0) {
+    return process.memoryUsage().rss / 1024 / 1024;
+  }
+  return totalKb / 1024;
+}
+
 function shouldDeferSessionAttention(error, config, lastKnownGoodSessionAt, now = Date.now()) {
   if (!error || error.kind === "captcha" || error.confirmable === false) {
     return false;
@@ -45,86 +93,26 @@ function shouldDeferSessionAttention(error, config, lastKnownGoodSessionAt, now 
   return now - lastKnownGoodSessionAt < config.sessionAttentionGraceMs;
 }
 
-function formatEuro(value) {
-  if (value === null || value === undefined || value === "") {
-    return "n/a";
-  }
-
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return "n/a";
-  }
-  return `\u20ac${parsed.toFixed(2)}`;
-}
-
-function notifyAllProductsReason(config, nowMs = Date.now()) {
-  if (config.notifyAllProducts) {
-    return "notify all products mode";
-  }
-
-  if (config.notifyAllProductsWindow && isTimeWindowActive(config.notifyAllProductsWindow, config.timezoneId, nowMs)) {
-    const window = parseTimeWindow(config.notifyAllProductsWindow);
-    return `notify all products window ${window ? window.label : config.notifyAllProductsWindow}`;
-  }
-
-  return "";
-}
-
-function isNotifyAllProductsActive(config, nowMs = Date.now()) {
-  return Boolean(notifyAllProductsReason(config, nowMs));
-}
-
-function notificationTriggers(product, scoring, config, nowMs = Date.now()) {
-  const triggers = [];
-
-  const notifyAllReason = notifyAllProductsReason(config, nowMs);
-  if (notifyAllReason) {
-    triggers.push(notifyAllReason);
-    return triggers;
-  }
-
-  const estimatedValue =
-    product.estimated_value_eur === null ||
-    product.estimated_value_eur === undefined ||
-    product.estimated_value_eur === ""
-      ? Number.NaN
-      : Number(product.estimated_value_eur);
-  const valueTrigger =
-    config.minValueToNotifyEur > 0 &&
-    Number.isFinite(estimatedValue) &&
-    estimatedValue >= config.minValueToNotifyEur;
-
-  if (valueTrigger) {
-    triggers.push(`estimated value ${formatEuro(estimatedValue)} >= ${formatEuro(config.minValueToNotifyEur)}`);
-  }
-
-  if (scoring.score >= config.minScoreToNotify) {
-    if (!config.strictNotifyMode) {
-      triggers.push(`score ${scoring.score} >= ${config.minScoreToNotify}`);
-    } else if (
-      scoring.positiveSignals >= config.strictMinPositiveSignals &&
-      scoring.negativeSignals <= config.strictMaxNegativeSignals
-    ) {
-      triggers.push(
-        `strict score ${scoring.score} >= ${config.minScoreToNotify} ` +
-          `(${scoring.positiveSignals} positive, ${scoring.negativeSignals} negative)`
-      );
-    }
-  }
-
-  return triggers;
-}
-
 async function runCycle({ scanner, storage, telegram, config, logger }) {
   const startedAt = Date.now();
+  const startedAtIso = new Date(startedAt).toISOString();
   let scanned = 0;
   let newProducts = 0;
   let notified = 0;
   let maxScore = null;
+  let skippedAlreadyNotified = 0;
+  let skippedNoTrigger = 0;
+  let skippedNotificationLimit = 0;
+  let telegramFailures = 0;
+  const sections = [];
 
   for (const section of config.sections) {
     const products = await scanner.scanSection(section);
     scanned += products.length;
+    sections.push({
+      name: section.name,
+      scanned: products.length
+    });
 
     for (const product of products) {
       const scoring = scoreProduct(product, config.keywords);
@@ -144,10 +132,16 @@ async function runCycle({ scanner, storage, telegram, config, logger }) {
       const triggers = notificationTriggers(saved.product, scoring, config);
       const shouldNotify = saved.product.notified !== 1 && triggers.length > 0;
       if (!shouldNotify) {
+        if (saved.product.notified === 1) {
+          skippedAlreadyNotified += 1;
+        } else {
+          skippedNoTrigger += 1;
+        }
         continue;
       }
 
       if (notified >= config.maxNotificationsPerCycle) {
+        skippedNotificationLimit += 1;
         logger.warn(
           `Notification limit reached; not notifying score=${scoring.score} ` +
             `value=${formatEuro(saved.product.estimated_value_eur)} title="${product.title}"`
@@ -169,6 +163,7 @@ async function runCycle({ scanner, storage, telegram, config, logger }) {
           );
         }
       } catch (error) {
+        telegramFailures += 1;
         logger.error(`Telegram notification failed for product id=${saved.product.id}: ${error.message}`);
       }
     }
@@ -179,18 +174,49 @@ async function runCycle({ scanner, storage, telegram, config, logger }) {
   }
 
   const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+  let outcome = "no_notifications";
+  let reasonNoNotifications = "";
+  if (notified > 0) {
+    outcome = "sent_notifications";
+    reasonNoNotifications = "sent notifications";
+  } else if (scanned === 0) {
+    outcome = "no_products";
+    reasonNoNotifications = "no products found";
+  } else if (skippedNotificationLimit > 0) {
+    outcome = "notification_limit";
+    reasonNoNotifications = "notification limit reached";
+  } else if (telegramFailures > 0) {
+    outcome = "telegram_failures";
+    reasonNoNotifications = "telegram failures";
+  } else if (newProducts === 0) {
+    outcome = "all_seen";
+    reasonNoNotifications = "all scanned products were already known";
+  } else if (skippedNoTrigger > 0) {
+    outcome = "no_matching_triggers";
+    reasonNoNotifications = "new products did not match notification triggers";
+  }
+
   logger.info(
     `Cycle complete: scanned=${scanned} new=${newProducts} notified=${notified} max_score=${
       maxScore === null ? "n/d" : maxScore
-    } elapsed=${elapsedSeconds}s`
+    } elapsed=${elapsedSeconds}s outcome=${outcome}`
   );
 
   return {
+    startedAt: startedAtIso,
+    completedAt: new Date().toISOString(),
     scanned,
     newProducts,
     notified,
     maxScore: maxScore === null ? "n/d" : maxScore,
-    elapsedSeconds
+    elapsedSeconds,
+    skippedAlreadyNotified,
+    skippedNoTrigger,
+    skippedNotificationLimit,
+    telegramFailures,
+    outcome,
+    reasonNoNotifications,
+    sections
   };
 }
 
@@ -201,7 +227,8 @@ async function main() {
   const storage = new ProductStorage(baseConfig.databasePath, logger.child("storage"));
   const telegram = new TelegramClient(baseConfig, logger.child("telegram"));
   const runtimeStatus = {
-    lastCycle: null
+    lastCycle: null,
+    memory: null
   };
   let effectiveConfig = baseConfig;
   let control = null;
@@ -215,18 +242,41 @@ async function main() {
   let lastKnownGoodSessionAt = Date.now();
   let nextDelayOverrideMs = 0;
   let nextDelayReason = "";
+  let lastMemoryRecycleAt = 0;
 
   function refreshConfig() {
     effectiveConfig = applyRuntimeSettings(baseConfig, storage.getSettings());
     return effectiveConfig;
   }
 
-  function shouldRestartBrowser(config, now = Date.now()) {
-    return Boolean(
+  function browserRestartReason(config, now = Date.now()) {
+    if (
       config.browserRestartIntervalMs > 0 &&
-        browserStartedAt > 0 &&
-        now - browserStartedAt >= config.browserRestartIntervalMs
-    );
+      browserStartedAt > 0 &&
+      now - browserStartedAt >= config.browserRestartIntervalMs
+    ) {
+      const ageMinutes = Math.round((now - browserStartedAt) / 60000);
+      return `scheduled recycle after ${ageMinutes}m`;
+    }
+
+    if (config.browserMemoryRecycleMb > 0) {
+      const rssMb = Math.round(processTreeRssMb());
+      runtimeStatus.memory = {
+        processTreeRssMb: rssMb,
+        thresholdMb: config.browserMemoryRecycleMb,
+        cooldownMinutes: Math.round(config.browserMemoryRecycleCooldownMs / 60000),
+        lastMemoryRecycleAt
+      };
+
+      const cooldownActive =
+        lastMemoryRecycleAt > 0 && now - lastMemoryRecycleAt < config.browserMemoryRecycleCooldownMs;
+      if (!cooldownActive && rssMb >= config.browserMemoryRecycleMb) {
+        lastMemoryRecycleAt = now;
+        return `memory recycle ${rssMb}MB >= ${config.browserMemoryRecycleMb}MB`;
+      }
+    }
+
+    return "";
   }
 
   async function openBrowserContext(reason) {
@@ -316,6 +366,7 @@ async function main() {
     scanner.config = effectiveConfig;
     try {
       runtimeStatus.lastCycle = await runCycle({ scanner, storage, telegram, config: effectiveConfig, logger });
+      storage.recordScanCycle(runtimeStatus.lastCycle);
       consecutiveSessionAttentionFailures = 0;
       lastKnownGoodSessionAt = Date.now();
     } catch (error) {
@@ -426,9 +477,9 @@ async function main() {
     }
 
     refreshConfig();
-    if (shouldRestartBrowser(effectiveConfig)) {
-      const ageMinutes = Math.round((Date.now() - browserStartedAt) / 60000);
-      await openBrowserContext(`scheduled recycle after ${ageMinutes}m`);
+    const recycleReason = browserRestartReason(effectiveConfig);
+    if (recycleReason) {
+      await openBrowserContext(recycleReason);
     } else {
       scanner.config = effectiveConfig;
     }

@@ -57,6 +57,15 @@ Commands:
 /lang it|en
 /status
 /config
+/dashboard
+/latest 10
+/latest unnotified 10
+/why search text
+/replay search text 3
+/profile conservative
+/profile balanced
+/profile drop
+/profile notify-all
 /notify_all on|off
 /notify_all always
 /notify_all_window 09:00-22:30
@@ -76,6 +85,15 @@ Commands:
 ```
 
 Runtime overrides are applied before every scan cycle. Use `/reset all` to return to the `.env` defaults.
+
+Profiles are runtime presets:
+
+- `conservative`: slower scans, strict filters, no notify-all.
+- `balanced`: practical daily defaults with score/value alerts and memory recycling.
+- `drop`: aggressive scan timing for active drop windows.
+- `notify-all`: notify every newly seen product 24/7 and clear the notify-all window.
+
+Diagnostics are based on the local SQLite database. `/why` explains saved products; `/replay` resends saved products intentionally; `/dashboard` shows recent scan-cycle summaries.
 
 ## Vine Sections
 
@@ -113,6 +131,8 @@ PRODUCT_READY_TIMEOUT_SECONDS=5
 PAGE_SETTLE_SECONDS=1
 SECTION_DELAY_SECONDS=1
 BROWSER_RESTART_INTERVAL_MINUTES=180
+BROWSER_MEMORY_RECYCLE_MB=0
+BROWSER_MEMORY_RECYCLE_COOLDOWN_MINUTES=10
 BLOCK_RESOURCE_TYPES=font,media
 ```
 
@@ -144,6 +164,8 @@ BLOCK_RESOURCE_TYPES=image,font,media
 This profile scans much more often and blocks product images for speed. It is useful for a private instance you actively watch, but the default profile is more conservative.
 
 `BROWSER_RESTART_INTERVAL_MINUTES` closes and reopens the Chromium context periodically while keeping the persistent browser profile. This helps long-running small hosts release Chromium memory before it grows into an OOM condition. Set it to `0` to disable automatic browser recycling.
+
+`BROWSER_MEMORY_RECYCLE_MB` is an optional Linux process-tree RSS guard. When set above `0`, Vine Watcher sums the Node/Chromium process tree memory and recycles Chromium if it crosses the configured MB threshold. `BROWSER_MEMORY_RECYCLE_COOLDOWN_MINUTES` prevents repeated recycle loops.
 
 ## Notifications
 

@@ -6,11 +6,14 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.3.0] - 2026-06-23
+
 ### Changed
 
 - Added `thread` and `wireless` to the default positive smart-home scoring keywords.
 - Expanded default scoring for smart-home, Home Assistant, energy monitoring, network/camera gear, household appliances, and useful appliance accessories, including Italian and English terms.
 - Products are now processed and notified immediately after each section scan, instead of waiting for all sections to finish.
+- Bumped package version to `0.3.0`.
 
 ### Added
 
@@ -19,6 +22,9 @@ This project uses semantic versioning.
 - Added optional Telegram Control with `/help`, `/status`, `/config`, runtime filters, speed profiles, panic mode, and Italian/English command help.
 - Added a Telegram native command menu and `/menu` inline button control panel for common runtime actions.
 - Added a Telegram Control 24/7 notify-all action that enables notify-all mode and clears the scheduled notify-all window.
+- Added `/dashboard`, `/latest`, `/why`, `/replay`, and `/profile` Telegram Control commands.
+- Added scan-cycle history in SQLite for easier diagnostics.
+- Added optional process-tree memory recycling with `BROWSER_MEMORY_RECYCLE_MB`.
 - Made Telegram Control responses friendlier, clearer, and easier to scan with human-readable labels and lightweight emoji.
 - Added scheduled Chromium context recycling with `BROWSER_RESTART_INTERVAL_MINUTES` to reduce long-running browser memory growth.
 

@@ -701,6 +701,9 @@ function loadConfig(overrides = {}) {
     sectionDelayMs: parseNumber(readEnv("SECTION_DELAY_SECONDS", "1"), 1, 0) * 1000,
     browserRestartIntervalMs:
       parseNumber(readEnv("BROWSER_RESTART_INTERVAL_MINUTES", "180"), 180, 0) * 60 * 1000,
+    browserMemoryRecycleMb: parseNumber(readEnv("BROWSER_MEMORY_RECYCLE_MB", "0"), 0, 0),
+    browserMemoryRecycleCooldownMs:
+      parseNumber(readEnv("BROWSER_MEMORY_RECYCLE_COOLDOWN_MINUTES", "10"), 10, 1) * 60 * 1000,
     blockedResourceTypes: parseList(readEnv("BLOCK_RESOURCE_TYPES", "font,media"), ["font", "media"]),
     databasePath: resolveProjectPath(readEnv("DATABASE_PATH", "./data/vine-watcher.sqlite")),
     playwrightUserDataDir: resolveProjectPath(readEnv("PLAYWRIGHT_USER_DATA_DIR", "./data/chromium-profile")),

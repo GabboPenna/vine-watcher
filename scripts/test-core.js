@@ -259,6 +259,22 @@ function testStorageEstimatedValue() {
   storage.deleteSetting("min_score_to_notify");
   assert.equal(storage.getSetting("min_score_to_notify", "fallback"), "fallback");
 
+  storage.recordScanCycle({
+    startedAt: "2026-06-20T10:00:00.000Z",
+    completedAt: "2026-06-20T10:00:07.000Z",
+    scanned: 2,
+    newProducts: 1,
+    notified: 1,
+    maxScore: 25,
+    elapsedSeconds: "7.0",
+    outcome: "sent_notifications",
+    reasonNoNotifications: "sent notifications",
+    sections: [{ name: "Additional items", scanned: 2 }]
+  });
+  assert.equal(storage.recentScanCycles(1)[0].outcome, "sent_notifications");
+  assert.equal(storage.searchProducts("bosch", 1)[0].asin, product.asin);
+  assert.equal(storage.recentProducts({ mode: "all", limit: 1 })[0].asin, product.asin);
+
   storage.close();
   fs.rmSync(dir, { recursive: true, force: true });
 }
@@ -266,10 +282,30 @@ function testStorageEstimatedValue() {
 async function testTelegramControlCommands() {
   const settings = {};
   const sentMessages = [];
+  const sentProducts = [];
   const editedMessages = [];
   const answeredCallbacks = [];
   const registeredCommands = [];
   let menuButtonRegistered = false;
+  const storedProducts = [
+    {
+      id: 101,
+      asin: "B002KTID3A",
+      title: "Bosch trapano smart",
+      normalized_title: "bosch trapano smart",
+      url: "https://www.amazon.it/dp/B002KTID3A",
+      section_url: "https://www.amazon.it/vine/vine-items?queue=encore",
+      image_url: "",
+      section: "Additional items",
+      estimated_value_eur: 42,
+      first_seen_at: "2026-06-20T10:00:00.000Z",
+      last_seen_at: "2026-06-20T10:05:00.000Z",
+      score: 25,
+      reasons_json: JSON.stringify(["brand: bosch"]),
+      notified: 0,
+      raw_text: "Bosch trapano smart"
+    }
+  ];
   const fakeStorage = {
     getSettings() {
       return { ...settings };
@@ -282,6 +318,42 @@ async function testTelegramControlCommands() {
     },
     deleteSetting(key) {
       delete settings[key];
+    },
+    searchProducts(query, limit) {
+      const normalized = String(query || "").toLowerCase();
+      return storedProducts
+        .filter((product) => product.title.toLowerCase().includes(normalized))
+        .slice(0, limit);
+    },
+    recentProducts({ limit } = {}) {
+      return storedProducts.slice(0, limit || 10);
+    },
+    recentScanCycles() {
+      return [
+        {
+          completed_at: "2026-06-20T10:06:00.000Z",
+          scanned: 3,
+          new_products: 1,
+          notified: 1,
+          outcome: "sent_notifications"
+        }
+      ];
+    },
+    getStats() {
+      return {
+        totals: {
+          total: storedProducts.length,
+          notified: storedProducts.filter((product) => product.notified === 1).length,
+          max_score: 25
+        },
+        topProducts: storedProducts
+      };
+    },
+    markNotified(productId) {
+      const product = storedProducts.find((item) => item.id === productId);
+      if (product) {
+        product.notified = 1;
+      }
     }
   };
   const fakeTelegram = {
@@ -291,6 +363,10 @@ async function testTelegramControlCommands() {
     },
     async sendText(text, options = {}) {
       sentMessages.push({ text, options });
+      return true;
+    },
+    async sendProduct(product, scoring) {
+      sentProducts.push({ product, scoring });
       return true;
     },
     async editText(chatId, messageId, text, options = {}) {
@@ -386,6 +462,15 @@ async function testTelegramControlCommands() {
   assert.match(await control.executeCommand("/fast on"), /fast profile on/);
   assert.equal(settings.panic_mode, "true");
   assert.equal(settings.panic_scan_interval_seconds, "5");
+  assert.match(await control.executeCommand("/profile drop"), /profile=drop/);
+  assert.equal(settings.scan_interval_seconds, "10");
+  assert.equal(settings.browser_memory_recycle_mb, "1500");
+  assert.match(await control.executeCommand("/latest 1"), /Bosch trapano smart/);
+  assert.match(await control.executeCommand("/dashboard"), /Saved products|Prodotti salvati/);
+  assert.match(await control.executeCommand("/why trapano"), /Bosch trapano smart/);
+  assert.match(await control.executeCommand("/replay trapano 1"), /1\/1/);
+  assert.equal(sentProducts.length, 1);
+  assert.equal(storedProducts[0].notified, 1);
   assert.match(await control.executeCommand("/reset notify_all_window"), /reset/);
   assert.equal(settings.notify_all_products_window, undefined);
   assert.match(await control.executeCommand("/reset min_score_to_notify"), /reset/);

@@ -1,7 +1,13 @@
 "use strict";
 
 const { parseTimeWindow, isTimeWindowActive } = require("./time-window");
+const {
+  formatEuro,
+  notificationBlockers,
+  notificationTriggers
+} = require("./notification-rules");
 const { CONTROL_OFFSET_KEY, normalizeLanguage, USER_SETTING_KEYS } = require("./runtime-config");
+const { scoreProduct } = require("./scorer");
 const { sleep } = require("./utils");
 
 const FAST_PROFILE_ON = {
@@ -28,6 +34,90 @@ const FAST_PROFILE_OFF = {
   product_ready_timeout_seconds: "5",
   page_settle_seconds: "1",
   section_delay_seconds: "1"
+};
+
+const CONTROL_PROFILES = {
+  conservative: {
+    notify_all_products: "false",
+    notify_all_products_window: "",
+    min_score_to_notify: "20",
+    min_value_to_notify_eur: "50",
+    strict_notify_mode: "true",
+    strict_min_positive_signals: "2",
+    strict_max_negative_signals: "0",
+    max_notifications_per_cycle: "5",
+    panic_mode: "false",
+    panic_until_ms: "0",
+    scan_interval_seconds: "45",
+    scan_jitter_seconds: "15",
+    page_timeout_seconds: "45",
+    product_ready_timeout_seconds: "5",
+    page_settle_seconds: "1",
+    section_delay_seconds: "1",
+    browser_memory_recycle_mb: "0"
+  },
+  balanced: {
+    notify_all_products: "false",
+    notify_all_products_window: "",
+    min_score_to_notify: "5",
+    min_value_to_notify_eur: "35",
+    strict_notify_mode: "true",
+    strict_min_positive_signals: "2",
+    strict_max_negative_signals: "0",
+    max_notifications_per_cycle: "10",
+    panic_mode: "false",
+    panic_until_ms: "0",
+    scan_interval_seconds: "30",
+    scan_jitter_seconds: "10",
+    page_timeout_seconds: "45",
+    product_ready_timeout_seconds: "5",
+    page_settle_seconds: "1",
+    section_delay_seconds: "1",
+    browser_memory_recycle_mb: "1500",
+    browser_memory_recycle_cooldown_minutes: "10"
+  },
+  drop: {
+    notify_all_products: "false",
+    notify_all_products_window: "",
+    min_score_to_notify: "5",
+    min_value_to_notify_eur: "35",
+    strict_notify_mode: "true",
+    strict_min_positive_signals: "2",
+    strict_max_negative_signals: "0",
+    max_notifications_per_cycle: "15",
+    panic_mode: "true",
+    panic_until_ms: "0",
+    panic_scan_interval_seconds: "5",
+    panic_scan_jitter_seconds: "0",
+    scan_interval_seconds: "10",
+    scan_jitter_seconds: "0",
+    page_timeout_seconds: "18",
+    product_ready_timeout_seconds: "2",
+    page_settle_seconds: "0",
+    section_delay_seconds: "0",
+    browser_memory_recycle_mb: "1500",
+    browser_memory_recycle_cooldown_minutes: "10"
+  },
+  "notify-all": {
+    notify_all_products: "true",
+    notify_all_products_window: "",
+    min_score_to_notify: "5",
+    min_value_to_notify_eur: "35",
+    strict_notify_mode: "true",
+    strict_min_positive_signals: "2",
+    strict_max_negative_signals: "0",
+    max_notifications_per_cycle: "20",
+    panic_mode: "false",
+    panic_until_ms: "0",
+    scan_interval_seconds: "30",
+    scan_jitter_seconds: "10",
+    page_timeout_seconds: "45",
+    product_ready_timeout_seconds: "5",
+    page_settle_seconds: "1",
+    section_delay_seconds: "1",
+    browser_memory_recycle_mb: "1500",
+    browser_memory_recycle_cooldown_minutes: "10"
+  }
 };
 
 const RESET_ALIASES = {
@@ -63,6 +153,9 @@ const CALLBACK_COMMANDS = {
   "vw:value:35": "/min_value 35",
   "vw:strict:on": "/strict on",
   "vw:strict:off": "/strict off",
+  "vw:profile:balanced": "/profile balanced",
+  "vw:profile:drop": "/profile drop",
+  "vw:profile:notify-all": "/profile notify-all",
   "vw:lang:it": "/lang it",
   "vw:lang:en": "/lang en"
 };
@@ -125,11 +218,6 @@ function boolText(value, language) {
   return value ? "✅ on" : "⏸️ off";
 }
 
-function formatEuro(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? `€${parsed.toFixed(2)}` : "n/a";
-}
-
 function isPanicActive(config, nowMs = Date.now()) {
   return Boolean(config.panicMode || (config.panicUntilMs && nowMs < config.panicUntilMs));
 }
@@ -143,6 +231,34 @@ function notifyAllActive(config, nowMs = Date.now()) {
 
 function seconds(valueMs) {
   return `${Math.round(Number(valueMs || 0) / 1000)}s`;
+}
+
+function parseLimit(value, fallback = 10, max = 20) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return Math.min(max, parsed);
+}
+
+function parseJsonArray(value) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function shortDate(value) {
+  if (!value) {
+    return "n/a";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return date.toISOString().replace("T", " ").slice(0, 16);
 }
 
 function isTelegramMessageNotModified(error) {
@@ -186,6 +302,11 @@ function controlCommands(language) {
       { command: "menu", description: "Apri il pannello con pulsanti" },
       { command: "status", description: "Stato live e ultimo ciclo" },
       { command: "config", description: "Configurazione efficace corrente" },
+      { command: "dashboard", description: "Dashboard rapida del watcher" },
+      { command: "latest", description: "Ultimi prodotti visti" },
+      { command: "why", description: "Spiega un prodotto visto" },
+      { command: "replay", description: "Reinvia prodotti gia visti" },
+      { command: "profile", description: "Applica un profilo operativo" },
       { command: "help", description: "Guida completa dei comandi" },
       { command: "fast", description: "Profilo veloce o conservativo" },
       { command: "panic", description: "Panic mode on, off o temporaneo" },
@@ -202,6 +323,11 @@ function controlCommands(language) {
     { command: "menu", description: "Open the button control panel" },
     { command: "status", description: "Live status and last cycle" },
     { command: "config", description: "Current effective configuration" },
+    { command: "dashboard", description: "Quick watcher dashboard" },
+    { command: "latest", description: "Latest seen products" },
+    { command: "why", description: "Explain a seen product" },
+    { command: "replay", description: "Replay already seen products" },
+    { command: "profile", description: "Apply an operating profile" },
     { command: "help", description: "Full command guide" },
     { command: "fast", description: "Fast or conservative profile" },
     { command: "panic", description: "Panic mode on, off, or temporary" },
@@ -224,6 +350,11 @@ function helpMessage(language) {
       "/menu - apre il pannello con pulsanti rapidi",
       "/status - ti dico come sto lavorando ora",
       "/config - mostra la configurazione efficace",
+      "/dashboard - riepilogo veloce di cicli e prodotti",
+      "/latest 10 - ultimi prodotti visti",
+      "/why testo - capiamo perche un prodotto e stato notificato o ignorato",
+      "/replay testo 3 - reinvia prodotti gia visti",
+      "/profile balanced|conservative|drop|notify-all - profilo operativo",
       "/help - mostra questa guida",
       "/lang it|en - cambia lingua",
       "",
@@ -265,6 +396,11 @@ function helpMessage(language) {
     "/menu - open the button control panel",
     "/status - show how I am working right now",
     "/config - show the effective configuration",
+    "/dashboard - quick summary of cycles and products",
+    "/latest 10 - latest seen products",
+    "/why text - explain why a product was notified or ignored",
+    "/replay text 3 - resend already seen products",
+    "/profile balanced|conservative|drop|notify-all - operating profile",
     "/help - show this guide",
     "/lang it|en - change language",
     "",
@@ -448,6 +584,16 @@ class TelegramControl {
       options = {
         reply_markup: this.backKeyboard(language)
       };
+    } else if (data === "vw:dashboard") {
+      text = this.formatDashboard(language);
+      options = {
+        reply_markup: this.backKeyboard(language)
+      };
+    } else if (data === "vw:latest") {
+      text = this.formatLatest(language, "all", 8);
+      options = {
+        reply_markup: this.backKeyboard(language)
+      };
     } else if (data === "vw:help") {
       text = helpMessage(language);
       options = {
@@ -538,6 +684,21 @@ class TelegramControl {
     if (command === "/config") {
       return this.formatConfig(this.language());
     }
+    if (command === "/dashboard") {
+      return this.formatDashboard(this.language());
+    }
+    if (command === "/latest") {
+      return this.commandLatest(args, this.language());
+    }
+    if (command === "/why") {
+      return this.commandWhy(args, this.language());
+    }
+    if (command === "/replay") {
+      return this.commandReplay(args, this.language());
+    }
+    if (command === "/profile") {
+      return this.commandProfile(args, this.language());
+    }
     if (command === "/notify_all") {
       return this.commandNotifyAll(args, language);
     }
@@ -596,6 +757,8 @@ class TelegramControl {
             status: "📊 Status",
             config: "⚙️ Config",
             refresh: "🔄 Aggiorna",
+            dashboard: "🧭 Dashboard",
+            latest: "🧾 Ultimi",
             fastOn: "⚡ Fast ON",
             fastOff: "🧘 Fast OFF",
             notifyAlways: "🌍 Tutto 24/7",
@@ -608,6 +771,9 @@ class TelegramControl {
             value35: "💶 Valore 35",
             strictOn: "🧪 Strict ON",
             strictOff: "🌤️ Strict OFF",
+            profileBalanced: "🎛️ Balanced",
+            profileDrop: "🚀 Drop",
+            profileNotifyAll: "🌍 Notify-all",
             italian: "🇮🇹 Italiano",
             english: "🇬🇧 English",
             help: "❔ Help"
@@ -616,6 +782,8 @@ class TelegramControl {
             status: "📊 Status",
             config: "⚙️ Config",
             refresh: "🔄 Refresh",
+            dashboard: "🧭 Dashboard",
+            latest: "🧾 Latest",
             fastOn: "⚡ Fast ON",
             fastOff: "🧘 Fast OFF",
             notifyAlways: "🌍 All 24/7",
@@ -628,6 +796,9 @@ class TelegramControl {
             value35: "💶 Value 35",
             strictOn: "🧪 Strict ON",
             strictOff: "🌤️ Strict OFF",
+            profileBalanced: "🎛️ Balanced",
+            profileDrop: "🚀 Drop",
+            profileNotifyAll: "🌍 Notify-all",
             italian: "🇮🇹 Italiano",
             english: "🇬🇧 English",
             help: "❔ Help"
@@ -639,6 +810,10 @@ class TelegramControl {
           { text: labels.status, callback_data: "vw:status" },
           { text: labels.config, callback_data: "vw:config" },
           { text: labels.refresh, callback_data: "vw:menu" }
+        ],
+        [
+          { text: labels.dashboard, callback_data: "vw:dashboard" },
+          { text: labels.latest, callback_data: "vw:latest" }
         ],
         [
           { text: labels.fastOn, callback_data: "vw:fast:on" },
@@ -661,6 +836,11 @@ class TelegramControl {
         [
           { text: labels.strictOn, callback_data: "vw:strict:on" },
           { text: labels.strictOff, callback_data: "vw:strict:off" }
+        ],
+        [
+          { text: labels.profileBalanced, callback_data: "vw:profile:balanced" },
+          { text: labels.profileDrop, callback_data: "vw:profile:drop" },
+          { text: labels.profileNotifyAll, callback_data: "vw:profile:notify-all" }
         ],
         [
           { text: labels.italian, callback_data: "vw:lang:it" },
@@ -804,6 +984,99 @@ class TelegramControl {
     return this.ok(language, enabled ? "fast profile on" : "fast profile off");
   }
 
+  commandProfile(args, language) {
+    const requested = String(args[0] || "").trim().toLowerCase();
+    const profileName = requested === "notifyall" || requested === "all" ? "notify-all" : requested;
+    const profile = CONTROL_PROFILES[profileName];
+    if (!profile) {
+      const names = Object.keys(CONTROL_PROFILES).join(", ");
+      return language === "it"
+        ? `🎛️ Scegli un profilo: ${names}`
+        : `🎛️ Choose a profile: ${names}`;
+    }
+    setMany(this.storage, profile);
+    return this.ok(language, `profile=${profileName}`);
+  }
+
+  commandLatest(args, language) {
+    const modes = new Set(["all", "notified", "unnotified", "ignored", "top"]);
+    const first = String(args[0] || "").trim().toLowerCase();
+    const mode = modes.has(first) ? first : "all";
+    const limitArg = modes.has(first) ? args[1] : args[0];
+    return this.formatLatest(language, mode, parseLimit(limitArg, 10, 20));
+  }
+
+  commandWhy(args, language) {
+    const query = args.join(" ").trim();
+    if (!query) {
+      return language === "it"
+        ? "🔎 Scrivimi cosa cercare, per esempio: /why maschera"
+        : "🔎 Tell me what to search, for example: /why mask";
+    }
+
+    const matches = this.storage.searchProducts ? this.storage.searchProducts(query, 5) : [];
+    if (matches.length === 0) {
+      return language === "it"
+        ? `🔎 Non trovo prodotti salvati per: ${query}`
+        : `🔎 I cannot find saved products for: ${query}`;
+    }
+
+    return this.formatWhyProduct(matches[0], language, {
+      query,
+      extraMatches: Math.max(0, matches.length - 1)
+    });
+  }
+
+  async commandReplay(args, language) {
+    const modes = new Set(["all", "notified", "unnotified", "ignored", "top"]);
+    const lastArg = args[args.length - 1];
+    const hasLimit = Number.isInteger(Number(lastArg)) && Number(lastArg) > 0;
+    const limit = parseLimit(hasLimit ? lastArg : "3", 3, 10);
+    const words = hasLimit ? args.slice(0, -1) : args;
+    const first = String(words[0] || "").trim().toLowerCase();
+    let products = [];
+    let label = "";
+
+    if (modes.has(first)) {
+      products = this.storage.recentProducts ? this.storage.recentProducts({ mode: first, limit }) : [];
+      label = first;
+    } else {
+      const query = words.join(" ").trim();
+      if (!query) {
+        return language === "it"
+          ? "📣 Uso: /replay testo 3 oppure /replay unnotified 5"
+          : "📣 Usage: /replay text 3 or /replay unnotified 5";
+      }
+      products = this.storage.searchProducts ? this.storage.searchProducts(query, limit) : [];
+      label = query;
+    }
+
+    if (products.length === 0) {
+      return language === "it" ? `📣 Nulla da reinviare per: ${label}` : `📣 Nothing to replay for: ${label}`;
+    }
+
+    let sent = 0;
+    const config = this.getConfig();
+    for (const product of products.slice(0, limit)) {
+      const scoring = this.scoreStoredProduct(product, config);
+      const triggers = notificationTriggers(product, scoring, config);
+      const ok = await this.telegram.sendProduct(product, {
+        ...scoring,
+        notificationTriggers: triggers.length > 0 ? [...triggers, "manual replay"] : ["manual replay"]
+      });
+      if (ok) {
+        sent += 1;
+        if (this.storage.markNotified) {
+          this.storage.markNotified(product.id);
+        }
+      }
+    }
+
+    return language === "it"
+      ? `📣 Replay completato: ${sent}/${products.length} prodotti reinviati.`
+      : `📣 Replay complete: ${sent}/${products.length} products resent.`;
+  }
+
   commandReset(args, language) {
     const key = String(args[0] || "").trim().toLowerCase();
     const keys = RESET_ALIASES[key] || (USER_SETTING_KEYS.includes(key) ? [key] : null);
@@ -819,6 +1092,166 @@ class TelegramControl {
 
   ok(language, detail) {
     return language === "it" ? `✅ Fatto, ho aggiornato questo:\n${detail}` : `✅ Done, I updated this:\n${detail}`;
+  }
+
+  scoreStoredProduct(product, config = this.getConfig()) {
+    const scoring = scoreProduct(product, config.keywords);
+    if (scoring.reasons.length === 0) {
+      const storedReasons = parseJsonArray(product.reasons_json);
+      return {
+        ...scoring,
+        reasons: storedReasons
+      };
+    }
+    return scoring;
+  }
+
+  formatProductLine(product, index = 1) {
+    const notified = Number(product.notified) === 1 ? "yes" : "no";
+    const value = formatEuro(product.estimated_value_eur);
+    return `${index}. score=${product.score} notified=${notified} value=${value} ${product.title}`;
+  }
+
+  formatLatest(language, mode = "all", limit = 10) {
+    const products = this.storage.recentProducts ? this.storage.recentProducts({ mode, limit }) : [];
+    if (products.length === 0) {
+      return language === "it"
+        ? `🧾 Nessun prodotto salvato per latest ${mode}.`
+        : `🧾 No saved products for latest ${mode}.`;
+    }
+
+    const header =
+      language === "it"
+        ? `🧾 Ultimi prodotti (${mode}, ${products.length})`
+        : `🧾 Latest products (${mode}, ${products.length})`;
+    return [
+      header,
+      "",
+      ...products.map((product, index) => this.formatProductLine(product, index + 1))
+    ].join("\n");
+  }
+
+  formatWhyProduct(product, language, details = {}) {
+    const config = this.getConfig();
+    const scoring = this.scoreStoredProduct(product, config);
+    const triggers = notificationTriggers(product, scoring, config);
+    const blockers = notificationBlockers(product, scoring, config, Number(product.notified) === 1);
+    const reasons = scoring.reasons && scoring.reasons.length > 0 ? scoring.reasons : ["no scoring reasons"];
+    const title = product.title || "Untitled product";
+    const extra =
+      details.extraMatches > 0
+        ? language === "it"
+          ? `Ho trovato anche altri ${details.extraMatches} match; ti mostro il piu recente.`
+          : `I also found ${details.extraMatches} other matches; showing the most recent one.`
+        : null;
+
+    const lines =
+      language === "it"
+        ? [
+            "🔎 Perche questo prodotto?",
+            extra,
+            "",
+            title,
+            "",
+            `Sezione: ${product.section || "n/a"}`,
+            `ASIN: ${product.asin || "n/a"}`,
+            `Score: ${scoring.score}`,
+            `Segnali: ${scoring.positiveSignals || 0} positivi / ${scoring.negativeSignals || 0} negativi`,
+            `Valore stimato: ${formatEuro(product.estimated_value_eur)}`,
+            `Notificato: ${Number(product.notified) === 1 ? "si" : "no"}`,
+            `Primo avvistamento: ${shortDate(product.first_seen_at)}`,
+            `Ultimo avvistamento: ${shortDate(product.last_seen_at)}`,
+            "",
+            "Trigger attuali:",
+            ...(triggers.length > 0 ? triggers.map((trigger) => `- ${trigger}`) : ["- nessuno"]),
+            "",
+            "Blocchi / motivi:",
+            ...blockers.map((blocker) => `- ${blocker}`),
+            "",
+            "Ragioni score:",
+            ...reasons.slice(0, 8).map((reason) => `- ${reason}`)
+          ]
+        : [
+            "🔎 Why this product?",
+            extra,
+            "",
+            title,
+            "",
+            `Section: ${product.section || "n/a"}`,
+            `ASIN: ${product.asin || "n/a"}`,
+            `Score: ${scoring.score}`,
+            `Signals: ${scoring.positiveSignals || 0} positive / ${scoring.negativeSignals || 0} negative`,
+            `Estimated value: ${formatEuro(product.estimated_value_eur)}`,
+            `Notified: ${Number(product.notified) === 1 ? "yes" : "no"}`,
+            `First seen: ${shortDate(product.first_seen_at)}`,
+            `Last seen: ${shortDate(product.last_seen_at)}`,
+            "",
+            "Current triggers:",
+            ...(triggers.length > 0 ? triggers.map((trigger) => `- ${trigger}`) : ["- none"]),
+            "",
+            "Blockers / reasons:",
+            ...blockers.map((blocker) => `- ${blocker}`),
+            "",
+            "Score reasons:",
+            ...reasons.slice(0, 8).map((reason) => `- ${reason}`)
+          ];
+
+    return lines.filter((line) => line !== null && line !== undefined).join("\n");
+  }
+
+  formatDashboard(language) {
+    const stats = this.storage.getStats ? this.storage.getStats() : { totals: {}, topProducts: [] };
+    const cycles = this.storage.recentScanCycles ? this.storage.recentScanCycles(5) : [];
+    const latest = this.storage.recentProducts ? this.storage.recentProducts({ mode: "all", limit: 5 }) : [];
+    const status = this.getStatus();
+    const memory = status.memory;
+    const totals = stats.totals || {};
+    const cycleLines = cycles.length > 0
+      ? cycles.map(
+          (cycle) =>
+            `- ${shortDate(cycle.completed_at)} scanned=${cycle.scanned} new=${cycle.new_products} ` +
+            `notified=${cycle.notified} outcome=${cycle.outcome || "n/a"}`
+        )
+      : [language === "it" ? "- nessun ciclo salvato" : "- no saved cycles"];
+    const latestLines =
+      latest.length > 0
+        ? latest.map((product, index) => `- ${this.formatProductLine(product, index + 1)}`)
+        : [language === "it" ? "- nessun prodotto salvato" : "- no saved products"];
+    const memoryLine = memory
+      ? `Memory tree: ${memory.processTreeRssMb}MB / ${memory.thresholdMb || "n/a"}MB`
+      : "Memory tree: n/a";
+
+    return (
+      language === "it"
+        ? [
+            "🧭 Vine Watcher dashboard",
+            "",
+            `Prodotti salvati: ${totals.total || 0}`,
+            `Prodotti notificati: ${totals.notified || 0}`,
+            `Score massimo storico: ${totals.max_score === null || totals.max_score === undefined ? "n/a" : totals.max_score}`,
+            memoryLine,
+            "",
+            "Ultimi cicli:",
+            ...cycleLines,
+            "",
+            "Ultimi prodotti:",
+            ...latestLines
+          ]
+        : [
+            "🧭 Vine Watcher dashboard",
+            "",
+            `Saved products: ${totals.total || 0}`,
+            `Notified products: ${totals.notified || 0}`,
+            `Best stored score: ${totals.max_score === null || totals.max_score === undefined ? "n/a" : totals.max_score}`,
+            memoryLine,
+            "",
+            "Recent cycles:",
+            ...cycleLines,
+            "",
+            "Latest products:",
+            ...latestLines
+          ]
+    ).join("\n");
   }
 
   formatMenu(language, actionResult = "") {
@@ -937,6 +1370,8 @@ class TelegramControl {
             `📦 Product ready timeout: ${seconds(config.productReadyTimeoutMs)}`,
             `🧘 Page settle: ${seconds(config.pageSettleMs)}`,
             `🧭 Section delay: ${seconds(config.sectionDelayMs)}`,
+            `🔁 Browser recycle: ${Math.round(config.browserRestartIntervalMs / 60000)}m`,
+            `🧠 Memory recycle: ${config.browserMemoryRecycleMb > 0 ? `${config.browserMemoryRecycleMb}MB` : "spento"}`,
             "",
             `📝 Override runtime: ${runtimeKeys.length > 0 ? runtimeKeys.join(", ") : "nessuno"}`
           ]
@@ -961,6 +1396,8 @@ class TelegramControl {
             `📦 Product ready timeout: ${seconds(config.productReadyTimeoutMs)}`,
             `🧘 Page settle: ${seconds(config.pageSettleMs)}`,
             `🧭 Section delay: ${seconds(config.sectionDelayMs)}`,
+            `🔁 Browser recycle: ${Math.round(config.browserRestartIntervalMs / 60000)}m`,
+            `🧠 Memory recycle: ${config.browserMemoryRecycleMb > 0 ? `${config.browserMemoryRecycleMb}MB` : "off"}`,
             "",
             `📝 Runtime overrides: ${runtimeKeys.length > 0 ? runtimeKeys.join(", ") : "none"}`
           ];

@@ -109,6 +109,11 @@ Useful commands:
 /lang it|en                   switch bot language
 /status                       live status and last scan summary
 /config                       effective config and runtime overrides
+/dashboard                    quick watcher dashboard
+/latest 10                    latest seen products
+/why text                     explain why a saved product was notified or ignored
+/replay text 3                resend already seen products
+/profile balanced             apply conservative, balanced, drop, or notify-all presets
 /notify_all on|off            notify every product
 /notify_all always            notify every product 24/7 and clear the notify-all window
 /notify_all_window 09:00-22:30 schedule notify-all mode
@@ -121,6 +126,13 @@ Useful commands:
 ```
 
 When Telegram Control starts it also registers the bot command menu, so Telegram clients can show native commands from the chat menu. `/menu` sends an inline button panel for the common actions.
+
+Diagnostic commands use the local SQLite history:
+
+- `/why maschera` explains the most recent matching saved product, including score, triggers, blockers, and notification state.
+- `/latest unnotified 10` shows recent stored products by mode: `all`, `notified`, `unnotified`, `ignored`, or `top`.
+- `/replay bosch 3` manually resends saved products to Telegram and marks them as notified.
+- `/dashboard` summarizes stored products, recent cycles, and memory guard status.
 
 ## Runtime Notes
 
@@ -156,7 +168,7 @@ Published image:
 docker pull gabrielepennacchia/vine-watcher:latest
 ```
 
-Release tags are published from semver Git tags such as `v0.2.0`.
+Release tags are published from semver Git tags such as `v0.3.0`.
 
 ## Project Layout
 

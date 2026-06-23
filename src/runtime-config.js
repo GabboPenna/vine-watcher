@@ -21,7 +21,10 @@ const USER_SETTING_KEYS = [
   "page_timeout_seconds",
   "product_ready_timeout_seconds",
   "page_settle_seconds",
-  "section_delay_seconds"
+  "section_delay_seconds",
+  "browser_restart_interval_minutes",
+  "browser_memory_recycle_mb",
+  "browser_memory_recycle_cooldown_minutes"
 ];
 
 function parseBool(value, fallback) {
@@ -124,6 +127,27 @@ function applyRuntimeSettings(baseConfig, settings = {}) {
   }
   if (settings.section_delay_seconds !== undefined) {
     config.sectionDelayMs = parseNumber(settings.section_delay_seconds, config.sectionDelayMs / 1000, 0) * 1000;
+  }
+  if (settings.browser_restart_interval_minutes !== undefined) {
+    config.browserRestartIntervalMs =
+      parseNumber(settings.browser_restart_interval_minutes, config.browserRestartIntervalMs / 60000, 0) * 60 * 1000;
+  }
+  if (settings.browser_memory_recycle_mb !== undefined) {
+    config.browserMemoryRecycleMb = parseNumber(
+      settings.browser_memory_recycle_mb,
+      config.browserMemoryRecycleMb,
+      0
+    );
+  }
+  if (settings.browser_memory_recycle_cooldown_minutes !== undefined) {
+    config.browserMemoryRecycleCooldownMs =
+      parseNumber(
+        settings.browser_memory_recycle_cooldown_minutes,
+        config.browserMemoryRecycleCooldownMs / 60000,
+        1
+      ) *
+      60 *
+      1000;
   }
 
   config.telegramControlLanguage = normalizeLanguage(
