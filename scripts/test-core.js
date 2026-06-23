@@ -373,6 +373,9 @@ async function testTelegramControlCommands() {
   assert.equal(settings.notify_all_products, "true");
   assert.match(await control.executeCommand("/notify_all_window 09:00-22:30"), /09:00-22:30/);
   assert.equal(settings.notify_all_products_window, "09:00-22:30");
+  assert.match(await control.executeCommand("/notify_all always"), /notify_all_products=true/);
+  assert.equal(settings.notify_all_products, "true");
+  assert.equal(settings.notify_all_products_window, "");
   assert.match(await control.executeCommand("/min_score 5"), /min_score_to_notify=5/);
   assert.equal(settings.min_score_to_notify, "5");
   assert.match(await control.executeCommand("/min_value 35"), /min_value_to_notify_eur=35/);
@@ -416,6 +419,11 @@ async function testTelegramControlCommands() {
   });
   assert.equal(sentMessages.length, 2);
   assert.ok(sentMessages[1].options.reply_markup.inline_keyboard.length > 0);
+  assert.ok(
+    sentMessages[1].options.reply_markup.inline_keyboard
+      .flat()
+      .some((button) => button.callback_data === "vw:notify_all:always")
+  );
 
   await control.handleUpdate({
     update_id: 13,

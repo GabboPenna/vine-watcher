@@ -53,8 +53,10 @@ const RESET_ALIASES = {
 const CALLBACK_COMMANDS = {
   "vw:fast:on": "/fast on",
   "vw:fast:off": "/fast off",
+  "vw:notify_all:always": "/notify_all always",
   "vw:notify_all:on": "/notify_all on",
   "vw:notify_all:off": "/notify_all off",
+  "vw:notify_all_window:off": "/notify_all_window off",
   "vw:panic:30": "/panic 30",
   "vw:panic:off": "/panic off",
   "vw:score:5": "/min_score 5",
@@ -227,6 +229,7 @@ function helpMessage(language) {
       "",
       "🔔 Notifiche:",
       "/notify_all on|off - segnala tutto sempre",
+      "/notify_all always - segnala tutto 24/7 e disattiva la fascia oraria",
       "/notify_all_window 09:00-22:30 - segnala tutto solo in fascia oraria",
       "/notify_all_window off - disattiva la fascia notify-all",
       "/min_score 5 - soglia score",
@@ -267,6 +270,7 @@ function helpMessage(language) {
     "",
     "🔔 Notifications:",
     "/notify_all on|off - notify every product all the time",
+    "/notify_all always - notify every product 24/7 and clear the daily window",
     "/notify_all_window 09:00-22:30 - notify every product only during a daily window",
     "/notify_all_window off - disable the notify-all window",
     "/min_score 5 - score threshold",
@@ -594,8 +598,10 @@ class TelegramControl {
             refresh: "🔄 Aggiorna",
             fastOn: "⚡ Fast ON",
             fastOff: "🧘 Fast OFF",
+            notifyAlways: "🌍 Tutto 24/7",
             notifyOn: "🔔 Tutto ON",
             notifyOff: "🔕 Tutto OFF",
+            windowOff: "🕘 Finestra OFF",
             panic30: "🚀 Panic 30m",
             panicOff: "🛬 Panic OFF",
             score5: "🎯 Score 5",
@@ -612,8 +618,10 @@ class TelegramControl {
             refresh: "🔄 Refresh",
             fastOn: "⚡ Fast ON",
             fastOff: "🧘 Fast OFF",
+            notifyAlways: "🌍 All 24/7",
             notifyOn: "🔔 All ON",
             notifyOff: "🔕 All OFF",
+            windowOff: "🕘 Window OFF",
             panic30: "🚀 Panic 30m",
             panicOff: "🛬 Panic OFF",
             score5: "🎯 Score 5",
@@ -637,8 +645,10 @@ class TelegramControl {
           { text: labels.fastOff, callback_data: "vw:fast:off" }
         ],
         [
+          { text: labels.notifyAlways, callback_data: "vw:notify_all:always" },
           { text: labels.notifyOn, callback_data: "vw:notify_all:on" },
-          { text: labels.notifyOff, callback_data: "vw:notify_all:off" }
+          { text: labels.notifyOff, callback_data: "vw:notify_all:off" },
+          { text: labels.windowOff, callback_data: "vw:notify_all_window:off" }
         ],
         [
           { text: labels.panic30, callback_data: "vw:panic:30" },
@@ -696,6 +706,12 @@ class TelegramControl {
   }
 
   commandNotifyAll(args, language) {
+    const value = String(args[0] || "").trim().toLowerCase();
+    if (["always", "24/7", "247", "allday", "all-day"].includes(value)) {
+      this.storage.setSetting("notify_all_products", "true");
+      this.storage.setSetting("notify_all_products_window", "");
+      return this.ok(language, "notify_all_products=true, notify_all_products_window=off");
+    }
     return this.commandBoolean("notify_all_products", args, language);
   }
 

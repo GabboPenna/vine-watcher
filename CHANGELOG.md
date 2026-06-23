@@ -18,6 +18,7 @@ This project uses semantic versioning.
 - Added `NOTIFY_ALL_PRODUCTS_WINDOW=HH:MM-HH:MM` to schedule notify-all mode during a local daily time window.
 - Added optional Telegram Control with `/help`, `/status`, `/config`, runtime filters, speed profiles, panic mode, and Italian/English command help.
 - Added a Telegram native command menu and `/menu` inline button control panel for common runtime actions.
+- Added a Telegram Control 24/7 notify-all action that enables notify-all mode and clears the scheduled notify-all window.
 - Made Telegram Control responses friendlier, clearer, and easier to scan with human-readable labels and lightweight emoji.
 - Added scheduled Chromium context recycling with `BROWSER_RESTART_INTERVAL_MINUTES` to reduce long-running browser memory growth.
 

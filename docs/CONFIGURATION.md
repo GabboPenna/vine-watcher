@@ -58,6 +58,7 @@ Commands:
 /status
 /config
 /notify_all on|off
+/notify_all always
 /notify_all_window 09:00-22:30
 /notify_all_window off
 /min_score 5

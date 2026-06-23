@@ -110,6 +110,7 @@ Useful commands:
 /status                       live status and last scan summary
 /config                       effective config and runtime overrides
 /notify_all on|off            notify every product
+/notify_all always            notify every product 24/7 and clear the notify-all window
 /notify_all_window 09:00-22:30 schedule notify-all mode
 /min_score 5                  change score threshold
 /min_value 35                 change estimated value threshold
