@@ -79,12 +79,22 @@ Commands:
 /panic 30
 /panic_interval 5 0
 /scan_interval 30 10
+/adaptive on|off
+/adaptive 4 45 4 12 2
 /fast on|off
 /reset key
 /reset all
 ```
 
 Runtime overrides are applied before every scan cycle. Use `/reset all` to return to the `.env` defaults.
+
+`/adaptive 4 45 4 12 2` means:
+
+- idle after 4 unchanged cycles
+- idle interval 45 seconds
+- active for 4 cycles after movement
+- active interval 12 seconds
+- active jitter 2 seconds
 
 Profiles are runtime presets:
 

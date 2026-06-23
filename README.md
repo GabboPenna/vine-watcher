@@ -126,6 +126,8 @@ Useful commands:
 /min_score 5                  change score threshold
 /min_value 35                 change estimated value threshold
 /strict on|off                toggle strict filtering
+/adaptive on|off              toggle adaptive scan scheduling
+/adaptive 4 45 4 12 2        tune adaptive idle/active timings
 /panic 30                     fast scan mode for 30 minutes
 /fast on|off                  fast or conservative profile
 /reset all                    clear runtime overrides
@@ -203,7 +205,7 @@ Published image:
 docker pull gabrielepennacchia/vine-watcher:latest
 ```
 
-Release tags are published from semver Git tags such as `v0.4.0`.
+Release tags are published from semver Git tags such as `v0.4.1`.
 
 ## Project Layout
 

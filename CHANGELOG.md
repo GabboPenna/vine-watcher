@@ -6,6 +6,14 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.4.1] - 2026-06-23
+
+### Added
+
+- Added Telegram Control support for adaptive scan scheduling with `/adaptive on|off` and `/adaptive idleAfter idleSeconds activeCycles activeSeconds activeJitter`.
+- Added inline Telegram menu buttons for adaptive scheduler on, off, and a practical smart preset.
+- Added adaptive scheduler details to Telegram status, config, help, and README/configuration docs.
+
 ## [0.4.0] - 2026-06-23
 
 ### Added

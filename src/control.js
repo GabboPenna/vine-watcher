@@ -137,12 +137,23 @@ const RESET_ALIASES = {
   panic: ["panic_mode", "panic_until_ms"],
   panic_interval: ["panic_scan_interval_seconds", "panic_scan_jitter_seconds"],
   scan_interval: ["scan_interval_seconds", "scan_jitter_seconds"],
+  adaptive: [
+    "adaptive_scan_enabled",
+    "adaptive_idle_after_cycles",
+    "adaptive_idle_interval_seconds",
+    "adaptive_active_cycles",
+    "adaptive_active_interval_seconds",
+    "adaptive_active_jitter_seconds"
+  ],
   fast: Object.keys(FAST_PROFILE_ON)
 };
 
 const CALLBACK_COMMANDS = {
   "vw:fast:on": "/fast on",
   "vw:fast:off": "/fast off",
+  "vw:adaptive:on": "/adaptive on",
+  "vw:adaptive:off": "/adaptive off",
+  "vw:adaptive:default": "/adaptive 4 45 4 12 2",
   "vw:notify_all:always": "/notify_all always",
   "vw:notify_all:on": "/notify_all on",
   "vw:notify_all:off": "/notify_all off",
@@ -385,6 +396,7 @@ function controlCommands(language) {
       { command: "profile", description: "Applica un profilo operativo" },
       { command: "help", description: "Guida completa dei comandi" },
       { command: "fast", description: "Profilo veloce o conservativo" },
+      { command: "adaptive", description: "Scheduler adattivo on/off" },
       { command: "panic", description: "Panic mode on, off o temporaneo" },
       { command: "notify_all", description: "Segnala ogni prodotto on/off" },
       { command: "notify_all_window", description: "Fascia oraria notify-all" },
@@ -406,6 +418,7 @@ function controlCommands(language) {
     { command: "profile", description: "Apply an operating profile" },
     { command: "help", description: "Full command guide" },
     { command: "fast", description: "Fast or conservative profile" },
+    { command: "adaptive", description: "Adaptive scheduler on/off" },
     { command: "panic", description: "Panic mode on, off, or temporary" },
     { command: "notify_all", description: "Notify every product on/off" },
     { command: "notify_all_window", description: "Notify-all time window" },
@@ -450,6 +463,8 @@ function helpMessage(language) {
       "/panic 30 - panic mode per 30 minuti",
       "/panic_interval 5 0 - intervallo panic e jitter",
       "/scan_interval 30 10 - intervallo normale e jitter",
+      "/adaptive on|off - scheduler adattivo",
+      "/adaptive 4 45 4 12 2 - idle dopo cicli, idle sec, active cicli, active sec, jitter",
       "/fast on|off - profilo veloce o conservativo",
       "",
       "🧹 Manutenzione:",
@@ -496,6 +511,8 @@ function helpMessage(language) {
     "/panic 30 - panic mode for 30 minutes",
     "/panic_interval 5 0 - panic interval and jitter",
     "/scan_interval 30 10 - normal interval and jitter",
+    "/adaptive on|off - adaptive scheduler",
+    "/adaptive 4 45 4 12 2 - idle after cycles, idle sec, active cycles, active sec, jitter",
     "/fast on|off - fast or conservative profile",
     "",
     "🧹 Maintenance:",
@@ -805,6 +822,9 @@ class TelegramControl {
     if (command === "/scan_interval") {
       return this.commandInterval("scan_interval_seconds", "scan_jitter_seconds", args, language, 10);
     }
+    if (command === "/adaptive") {
+      return this.commandAdaptive(args, language);
+    }
     if (command === "/fast") {
       return this.commandFast(args, language);
     }
@@ -837,6 +857,9 @@ class TelegramControl {
             latest: "🧾 Ultimi",
             fastOn: "⚡ Fast ON",
             fastOff: "🧘 Fast OFF",
+            adaptiveOn: "🧠 Adaptive ON",
+            adaptiveOff: "🛑 Adaptive OFF",
+            adaptiveDefault: "✨ Adaptive smart",
             notifyAlways: "🌍 Tutto 24/7",
             notifyOn: "🔔 Tutto ON",
             notifyOff: "🔕 Tutto OFF",
@@ -862,6 +885,9 @@ class TelegramControl {
             latest: "🧾 Latest",
             fastOn: "⚡ Fast ON",
             fastOff: "🧘 Fast OFF",
+            adaptiveOn: "🧠 Adaptive ON",
+            adaptiveOff: "🛑 Adaptive OFF",
+            adaptiveDefault: "✨ Adaptive smart",
             notifyAlways: "🌍 All 24/7",
             notifyOn: "🔔 All ON",
             notifyOff: "🔕 All OFF",
@@ -894,6 +920,11 @@ class TelegramControl {
         [
           { text: labels.fastOn, callback_data: "vw:fast:on" },
           { text: labels.fastOff, callback_data: "vw:fast:off" }
+        ],
+        [
+          { text: labels.adaptiveOn, callback_data: "vw:adaptive:on" },
+          { text: labels.adaptiveOff, callback_data: "vw:adaptive:off" },
+          { text: labels.adaptiveDefault, callback_data: "vw:adaptive:default" }
         ],
         [
           { text: labels.notifyAlways, callback_data: "vw:notify_all:always" },
@@ -1049,6 +1080,73 @@ class TelegramControl {
     this.storage.setSetting(baseKey, String(base));
     this.storage.setSetting(jitterKey, String(jitter));
     return this.ok(language, `${baseKey}=${base}, ${jitterKey}=${jitter}`);
+  }
+
+  commandAdaptive(args, language) {
+    const value = String(args[0] || "").trim().toLowerCase();
+    const usage =
+      language === "it"
+        ? "🧠 Uso: /adaptive on, /adaptive off oppure /adaptive 4 45 4 12 2"
+        : "🧠 Usage: /adaptive on, /adaptive off, or /adaptive 4 45 4 12 2";
+
+    if (!value || value === "status") {
+      const config = this.getConfig();
+      return language === "it"
+        ? [
+            "🧠 Scheduler adattivo",
+            "",
+            `• Stato: ${boolText(config.adaptiveScanEnabled, language)}`,
+            `• Idle dopo: ${config.adaptiveIdleAfterCycles} cicli`,
+            `• Intervallo idle: ${config.adaptiveIdleIntervalSeconds}s`,
+            `• Active per: ${config.adaptiveActiveCycles} cicli`,
+            `• Intervallo active: ${config.adaptiveActiveIntervalSeconds}s + ${config.adaptiveActiveJitterSeconds}s jitter`,
+            "",
+            "Panic mode, se attivo, ha sempre la priorità."
+          ].join("\n")
+        : [
+            "🧠 Adaptive scheduler",
+            "",
+            `• State: ${boolText(config.adaptiveScanEnabled, language)}`,
+            `• Idle after: ${config.adaptiveIdleAfterCycles} cycles`,
+            `• Idle interval: ${config.adaptiveIdleIntervalSeconds}s`,
+            `• Active for: ${config.adaptiveActiveCycles} cycles`,
+            `• Active interval: ${config.adaptiveActiveIntervalSeconds}s + ${config.adaptiveActiveJitterSeconds}s jitter`,
+            "",
+            "Panic mode always has priority when enabled."
+          ].join("\n");
+    }
+
+    const enabled = parseOnOff(value);
+    if (enabled !== null) {
+      this.storage.setSetting("adaptive_scan_enabled", enabled ? "true" : "false");
+      return this.ok(language, `adaptive_scan_enabled=${enabled ? "true" : "false"}`);
+    }
+
+    const idleAfter = parseNumberArg(args[0], { min: 1, integer: true });
+    const idleInterval = parseNumberArg(args[1], { min: 10, integer: true });
+    const activeCycles = parseNumberArg(args[2], { min: 1, integer: true });
+    const activeInterval = parseNumberArg(args[3], { min: 5, integer: true });
+    const activeJitter = parseNumberArg(args[4] === undefined ? "0" : args[4], { min: 0, integer: true });
+    if (
+      idleAfter === null ||
+      idleInterval === null ||
+      activeCycles === null ||
+      activeInterval === null ||
+      activeJitter === null
+    ) {
+      return usage;
+    }
+
+    this.storage.setSetting("adaptive_scan_enabled", "true");
+    this.storage.setSetting("adaptive_idle_after_cycles", String(idleAfter));
+    this.storage.setSetting("adaptive_idle_interval_seconds", String(idleInterval));
+    this.storage.setSetting("adaptive_active_cycles", String(activeCycles));
+    this.storage.setSetting("adaptive_active_interval_seconds", String(activeInterval));
+    this.storage.setSetting("adaptive_active_jitter_seconds", String(activeJitter));
+    return this.ok(
+      language,
+      `adaptive_scan_enabled=true, idle_after=${idleAfter}, idle=${idleInterval}s, active_cycles=${activeCycles}, active=${activeInterval}s, jitter=${activeJitter}s`
+    );
   }
 
   commandFast(args, language) {
@@ -1382,7 +1480,9 @@ class TelegramControl {
             `🧪 Strict mode: ${boolText(config.strictNotifyMode, language)} ` +
               `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
             `⚡ Panic mode: ${boolText(isPanicActive(config), language)} ` +
-              `(${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter)`
+              `(${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter)`,
+            `🧠 Adaptive: ${boolText(config.adaptiveScanEnabled, language)} ` +
+              `(active ${config.adaptiveActiveIntervalSeconds}s, idle ${config.adaptiveIdleIntervalSeconds}s)`
           ]
         : [
             "🚀 Vine Watcher Control Panel",
@@ -1396,7 +1496,9 @@ class TelegramControl {
             `🧪 Strict mode: ${boolText(config.strictNotifyMode, language)} ` +
               `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
             `⚡ Panic mode: ${boolText(isPanicActive(config), language)} ` +
-              `(${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter)`
+              `(${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter)`,
+            `🧠 Adaptive: ${boolText(config.adaptiveScanEnabled, language)} ` +
+              `(active ${config.adaptiveActiveIntervalSeconds}s, idle ${config.adaptiveIdleIntervalSeconds}s)`
           ];
 
     if (lastCycle) {
@@ -1430,6 +1532,8 @@ class TelegramControl {
               `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
             `⚡ Panic mode: ${boolText(isPanicActive(config), language)}`,
             `⏱️ Intervallo panic: ${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter`,
+            `🧠 Adaptive: ${boolText(config.adaptiveScanEnabled, language)} ` +
+              `(active ${config.adaptiveActiveIntervalSeconds}s, idle ${config.adaptiveIdleIntervalSeconds}s)`,
             `📣 Limite notifiche per giro: ${config.maxNotificationsPerCycle}`
           ]
         : [
@@ -1445,6 +1549,8 @@ class TelegramControl {
               `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
             `⚡ Panic mode: ${boolText(isPanicActive(config), language)}`,
             `⏱️ Panic interval: ${config.panicScanIntervalSeconds}s + ${config.panicScanJitterSeconds}s jitter`,
+            `🧠 Adaptive: ${boolText(config.adaptiveScanEnabled, language)} ` +
+              `(active ${config.adaptiveActiveIntervalSeconds}s, idle ${config.adaptiveIdleIntervalSeconds}s)`,
             `📣 Notification limit per sweep: ${config.maxNotificationsPerCycle}`
           ];
 
@@ -1476,6 +1582,9 @@ class TelegramControl {
             `🚀 Panic fino a: ${config.panicUntilMs ? new Date(config.panicUntilMs).toISOString() : "nessuno"}`,
             `⏱️ Panic interval: ${config.panicScanIntervalSeconds}s jitter=${config.panicScanJitterSeconds}s`,
             `🔁 Scan interval: ${config.scanIntervalSeconds}s jitter=${config.scanJitterSeconds}s`,
+            `🧠 Adaptive: ${boolText(config.adaptiveScanEnabled, language)}`,
+            `🧠 Adaptive idle: dopo ${config.adaptiveIdleAfterCycles} cicli, ${config.adaptiveIdleIntervalSeconds}s`,
+            `🧠 Adaptive active: ${config.adaptiveActiveCycles} cicli, ${config.adaptiveActiveIntervalSeconds}s jitter=${config.adaptiveActiveJitterSeconds}s`,
             `🌐 Page timeout: ${seconds(config.pageTimeoutMs)}`,
             `📦 Product ready timeout: ${seconds(config.productReadyTimeoutMs)}`,
             `🧘 Page settle: ${seconds(config.pageSettleMs)}`,
@@ -1502,6 +1611,9 @@ class TelegramControl {
             `🚀 Panic until: ${config.panicUntilMs ? new Date(config.panicUntilMs).toISOString() : "none"}`,
             `⏱️ Panic interval: ${config.panicScanIntervalSeconds}s jitter=${config.panicScanJitterSeconds}s`,
             `🔁 Scan interval: ${config.scanIntervalSeconds}s jitter=${config.scanJitterSeconds}s`,
+            `🧠 Adaptive: ${boolText(config.adaptiveScanEnabled, language)}`,
+            `🧠 Adaptive idle: after ${config.adaptiveIdleAfterCycles} cycles, ${config.adaptiveIdleIntervalSeconds}s`,
+            `🧠 Adaptive active: ${config.adaptiveActiveCycles} cycles, ${config.adaptiveActiveIntervalSeconds}s jitter=${config.adaptiveActiveJitterSeconds}s`,
             `🌐 Page timeout: ${seconds(config.pageTimeoutMs)}`,
             `📦 Product ready timeout: ${seconds(config.productReadyTimeoutMs)}`,
             `🧘 Page settle: ${seconds(config.pageSettleMs)}`,

@@ -505,6 +505,12 @@ async function testTelegramControlCommands() {
           panicScanJitterSeconds: 3,
           scanIntervalSeconds: 30,
           scanJitterSeconds: 10,
+          adaptiveScanEnabled: false,
+          adaptiveIdleAfterCycles: 5,
+          adaptiveIdleIntervalSeconds: 60,
+          adaptiveActiveCycles: 3,
+          adaptiveActiveIntervalSeconds: 15,
+          adaptiveActiveJitterSeconds: 3,
           pageTimeoutMs: 45000,
           productReadyTimeoutMs: 5000,
           pageSettleMs: 1000,
@@ -555,6 +561,15 @@ async function testTelegramControlCommands() {
   assert.match(await control.executeCommand("/strict_signals 3 1"), /strict_min_positive_signals=3/);
   assert.equal(settings.strict_min_positive_signals, "3");
   assert.equal(settings.strict_max_negative_signals, "1");
+  assert.match(await control.executeCommand("/adaptive on"), /adaptive_scan_enabled=true/);
+  assert.equal(settings.adaptive_scan_enabled, "true");
+  assert.match(await control.executeCommand("/adaptive 4 45 4 12 2"), /idle_after=4/);
+  assert.equal(settings.adaptive_idle_after_cycles, "4");
+  assert.equal(settings.adaptive_idle_interval_seconds, "45");
+  assert.equal(settings.adaptive_active_cycles, "4");
+  assert.equal(settings.adaptive_active_interval_seconds, "12");
+  assert.equal(settings.adaptive_active_jitter_seconds, "2");
+  assert.match(await control.executeCommand("/adaptive"), /Adaptive scheduler/);
   assert.match(await control.executeCommand("/fast on"), /fast profile on/);
   assert.equal(settings.panic_mode, "true");
   assert.equal(settings.panic_scan_interval_seconds, "5");
@@ -604,6 +619,11 @@ async function testTelegramControlCommands() {
     sentMessages[1].options.reply_markup.inline_keyboard
       .flat()
       .some((button) => button.callback_data === "vw:notify_all:always")
+  );
+  assert.ok(
+    sentMessages[1].options.reply_markup.inline_keyboard
+      .flat()
+      .some((button) => button.callback_data === "vw:adaptive:default")
   );
 
   await control.handleUpdate({
