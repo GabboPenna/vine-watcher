@@ -261,6 +261,82 @@ function shortDate(value) {
   return date.toISOString().replace("T", " ").slice(0, 16);
 }
 
+function compactText(value, maxLength = 96) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function scoreBadge(score) {
+  const value = Number(score);
+  if (!Number.isFinite(value)) {
+    return "🎯";
+  }
+  if (value >= 25) {
+    return "🏆";
+  }
+  if (value >= 10) {
+    return "✅";
+  }
+  if (value >= 0) {
+    return "🎯";
+  }
+  return "🧊";
+}
+
+function notifiedBadge(value, language) {
+  const yes = Number(value) === 1;
+  if (language === "it") {
+    return yes ? "🔔 notificato" : "🔕 non notificato";
+  }
+  return yes ? "🔔 notified" : "🔕 not notified";
+}
+
+function modeLabel(mode, language) {
+  const labels = {
+    it: {
+      all: "tutti",
+      notified: "notificati",
+      unnotified: "non notificati",
+      ignored: "ignorati",
+      top: "top score"
+    },
+    en: {
+      all: "all",
+      notified: "notified",
+      unnotified: "unnotified",
+      ignored: "ignored",
+      top: "top score"
+    }
+  };
+  return (labels[language] && labels[language][mode]) || mode;
+}
+
+function outcomeBadge(outcome) {
+  const normalized = String(outcome || "").toLowerCase();
+  if (normalized === "sent_notifications") {
+    return "🔔";
+  }
+  if (normalized === "all_seen") {
+    return "👀";
+  }
+  if (normalized === "no_products") {
+    return "🫙";
+  }
+  if (normalized === "no_matching_triggers") {
+    return "🧪";
+  }
+  if (normalized === "notification_limit") {
+    return "🚧";
+  }
+  if (normalized === "telegram_failures") {
+    return "⚠️";
+  }
+  return "📍";
+}
+
 function isTelegramMessageNotModified(error) {
   const message = String(error && error.message ? error.message : error).toLowerCase();
   return message.includes("message is not modified") || message.includes("message not modified");
@@ -1073,8 +1149,20 @@ class TelegramControl {
     }
 
     return language === "it"
-      ? `📣 Replay completato: ${sent}/${products.length} prodotti reinviati.`
-      : `📣 Replay complete: ${sent}/${products.length} products resent.`;
+      ? [
+          "📣 Replay completato",
+          "",
+          `✅ Reinviati: ${sent}/${products.length}`,
+          `🔎 Selezione: ${label}`,
+          "📝 Li ho marcati come notificati nel database locale."
+        ].join("\n")
+      : [
+          "📣 Replay complete",
+          "",
+          `✅ Resent: ${sent}/${products.length}`,
+          `🔎 Selection: ${label}`,
+          "📝 I marked them as notified in the local database."
+        ].join("\n");
   }
 
   commandReset(args, language) {
@@ -1091,7 +1179,9 @@ class TelegramControl {
   }
 
   ok(language, detail) {
-    return language === "it" ? `✅ Fatto, ho aggiornato questo:\n${detail}` : `✅ Done, I updated this:\n${detail}`;
+    return language === "it"
+      ? ["✅ Fatto!", "", `🔧 Aggiornato: ${detail}`, "🔄 Lo userò dal prossimo ciclo utile."].join("\n")
+      : ["✅ Done!", "", `🔧 Updated: ${detail}`, "🔄 I will use it from the next useful cycle."].join("\n");
   }
 
   scoreStoredProduct(product, config = this.getConfig()) {
@@ -1106,28 +1196,46 @@ class TelegramControl {
     return scoring;
   }
 
-  formatProductLine(product, index = 1) {
-    const notified = Number(product.notified) === 1 ? "yes" : "no";
+  formatProductLine(product, index = 1, language = "en") {
+    const notified = notifiedBadge(product.notified, language);
     const value = formatEuro(product.estimated_value_eur);
-    return `${index}. score=${product.score} notified=${notified} value=${value} ${product.title}`;
+    const title = compactText(product.title || "Untitled product", 92);
+    const section = product.section || "n/a";
+    return [
+      `${index}. ${scoreBadge(product.score)} ${title}`,
+      `   🎯 Score ${product.score} · ${notified} · 💶 ${value}`,
+      `   📍 ${section} · 🕒 ${shortDate(product.last_seen_at)}`
+    ].join("\n");
   }
 
   formatLatest(language, mode = "all", limit = 10) {
     const products = this.storage.recentProducts ? this.storage.recentProducts({ mode, limit }) : [];
     if (products.length === 0) {
       return language === "it"
-        ? `🧾 Nessun prodotto salvato per latest ${mode}.`
-        : `🧾 No saved products for latest ${mode}.`;
+        ? [
+            "🧾 Ultimi prodotti",
+            "",
+            `Non ho ancora prodotti salvati per la vista “${modeLabel(mode, language)}”.`
+          ].join("\n")
+        : [
+            "🧾 Latest products",
+            "",
+            `I do not have saved products for the “${modeLabel(mode, language)}” view yet.`
+          ].join("\n");
     }
 
     const header =
       language === "it"
-        ? `🧾 Ultimi prodotti (${mode}, ${products.length})`
-        : `🧾 Latest products (${mode}, ${products.length})`;
+        ? "🧾 Ultimi prodotti"
+        : "🧾 Latest products";
     return [
       header,
+      `📚 ${language === "it" ? "Vista" : "View"}: ${modeLabel(mode, language)}`,
+      `🔢 ${language === "it" ? "Mostrati" : "Shown"}: ${products.length}`,
       "",
-      ...products.map((product, index) => this.formatProductLine(product, index + 1))
+      ...products.map((product, index) => this.formatProductLine(product, index + 1, language)).join("\n\n").split("\n"),
+      "",
+      language === "it" ? "💡 Usa /why testo per capire un prodotto." : "💡 Use /why text to explain a product."
     ].join("\n");
   }
 
@@ -1148,52 +1256,50 @@ class TelegramControl {
     const lines =
       language === "it"
         ? [
-            "🔎 Perche questo prodotto?",
-            extra,
+            "🔎 Perché questo prodotto?",
+            extra ? `ℹ️ ${extra}` : null,
             "",
-            title,
+            `📦 ${compactText(title, 180)}`,
             "",
-            `Sezione: ${product.section || "n/a"}`,
-            `ASIN: ${product.asin || "n/a"}`,
-            `Score: ${scoring.score}`,
-            `Segnali: ${scoring.positiveSignals || 0} positivi / ${scoring.negativeSignals || 0} negativi`,
-            `Valore stimato: ${formatEuro(product.estimated_value_eur)}`,
-            `Notificato: ${Number(product.notified) === 1 ? "si" : "no"}`,
-            `Primo avvistamento: ${shortDate(product.first_seen_at)}`,
-            `Ultimo avvistamento: ${shortDate(product.last_seen_at)}`,
+            `📍 Sezione: ${product.section || "n/a"}`,
+            `🆔 ASIN: ${product.asin || "n/a"}`,
+            `🎯 Score: ${scoreBadge(scoring.score)} ${scoring.score}`,
+            `📡 Segnali: ${scoring.positiveSignals || 0} positivi / ${scoring.negativeSignals || 0} negativi`,
+            `💶 Valore stimato: ${formatEuro(product.estimated_value_eur)}`,
+            `🔔 Stato: ${notifiedBadge(product.notified, language)}`,
+            `🕒 Visto: ${shortDate(product.first_seen_at)} → ${shortDate(product.last_seen_at)}`,
             "",
-            "Trigger attuali:",
-            ...(triggers.length > 0 ? triggers.map((trigger) => `- ${trigger}`) : ["- nessuno"]),
+            "🚦 Trigger attuali",
+            ...(triggers.length > 0 ? triggers.map((trigger) => `✅ ${trigger}`) : ["🫙 nessuno"]),
             "",
-            "Blocchi / motivi:",
-            ...blockers.map((blocker) => `- ${blocker}`),
+            "🧱 Blocchi / note",
+            ...blockers.map((blocker) => (blocker === "no blockers" ? "✅ nessun blocco" : `⚠️ ${blocker}`)),
             "",
-            "Ragioni score:",
-            ...reasons.slice(0, 8).map((reason) => `- ${reason}`)
+            "🧠 Ragioni score",
+            ...reasons.slice(0, 8).map((reason) => `✨ ${reason}`)
           ]
         : [
             "🔎 Why this product?",
-            extra,
+            extra ? `ℹ️ ${extra}` : null,
             "",
-            title,
+            `📦 ${compactText(title, 180)}`,
             "",
-            `Section: ${product.section || "n/a"}`,
-            `ASIN: ${product.asin || "n/a"}`,
-            `Score: ${scoring.score}`,
-            `Signals: ${scoring.positiveSignals || 0} positive / ${scoring.negativeSignals || 0} negative`,
-            `Estimated value: ${formatEuro(product.estimated_value_eur)}`,
-            `Notified: ${Number(product.notified) === 1 ? "yes" : "no"}`,
-            `First seen: ${shortDate(product.first_seen_at)}`,
-            `Last seen: ${shortDate(product.last_seen_at)}`,
+            `📍 Section: ${product.section || "n/a"}`,
+            `🆔 ASIN: ${product.asin || "n/a"}`,
+            `🎯 Score: ${scoreBadge(scoring.score)} ${scoring.score}`,
+            `📡 Signals: ${scoring.positiveSignals || 0} positive / ${scoring.negativeSignals || 0} negative`,
+            `💶 Estimated value: ${formatEuro(product.estimated_value_eur)}`,
+            `🔔 State: ${notifiedBadge(product.notified, language)}`,
+            `🕒 Seen: ${shortDate(product.first_seen_at)} → ${shortDate(product.last_seen_at)}`,
             "",
-            "Current triggers:",
-            ...(triggers.length > 0 ? triggers.map((trigger) => `- ${trigger}`) : ["- none"]),
+            "🚦 Current triggers",
+            ...(triggers.length > 0 ? triggers.map((trigger) => `✅ ${trigger}`) : ["🫙 none"]),
             "",
-            "Blockers / reasons:",
-            ...blockers.map((blocker) => `- ${blocker}`),
+            "🧱 Blockers / notes",
+            ...blockers.map((blocker) => (blocker === "no blockers" ? "✅ no blockers" : `⚠️ ${blocker}`)),
             "",
-            "Score reasons:",
-            ...reasons.slice(0, 8).map((reason) => `- ${reason}`)
+            "🧠 Score reasons",
+            ...reasons.slice(0, 8).map((reason) => `✨ ${reason}`)
           ];
 
     return lines.filter((line) => line !== null && line !== undefined).join("\n");
@@ -1207,49 +1313,53 @@ class TelegramControl {
     const memory = status.memory;
     const totals = stats.totals || {};
     const cycleLines = cycles.length > 0
-      ? cycles.map(
-          (cycle) =>
-            `- ${shortDate(cycle.completed_at)} scanned=${cycle.scanned} new=${cycle.new_products} ` +
-            `notified=${cycle.notified} outcome=${cycle.outcome || "n/a"}`
-        )
-      : [language === "it" ? "- nessun ciclo salvato" : "- no saved cycles"];
+      ? cycles.map((cycle) => {
+          const label = cycle.outcome || "n/a";
+          return (
+            `${outcomeBadge(label)} ${shortDate(cycle.completed_at)} · ` +
+            `👀 ${cycle.scanned} · 🆕 ${cycle.new_products} · 🔔 ${cycle.notified} · ${label}`
+          );
+        })
+      : [language === "it" ? "🫙 nessun ciclo salvato" : "🫙 no saved cycles"];
     const latestLines =
       latest.length > 0
-        ? latest.map((product, index) => `- ${this.formatProductLine(product, index + 1)}`)
-        : [language === "it" ? "- nessun prodotto salvato" : "- no saved products"];
+        ? latest.map((product, index) => this.formatProductLine(product, index + 1, language))
+        : [language === "it" ? "🫙 nessun prodotto salvato" : "🫙 no saved products"];
     const memoryLine = memory
-      ? `Memory tree: ${memory.processTreeRssMb}MB / ${memory.thresholdMb || "n/a"}MB`
-      : "Memory tree: n/a";
+      ? `🧠 Memory tree: ${memory.processTreeRssMb}MB / ${memory.thresholdMb || "n/a"}MB`
+      : "🧠 Memory tree: n/a";
 
     return (
       language === "it"
         ? [
             "🧭 Vine Watcher dashboard",
             "",
-            `Prodotti salvati: ${totals.total || 0}`,
-            `Prodotti notificati: ${totals.notified || 0}`,
-            `Score massimo storico: ${totals.max_score === null || totals.max_score === undefined ? "n/a" : totals.max_score}`,
+            "📦 Archivio",
+            `• Prodotti salvati: ${totals.total || 0}`,
+            `• Prodotti notificati: ${totals.notified || 0}`,
+            `• Score massimo storico: ${totals.max_score === null || totals.max_score === undefined ? "n/a" : totals.max_score}`,
             memoryLine,
             "",
-            "Ultimi cicli:",
+            "🕒 Ultimi cicli",
             ...cycleLines,
             "",
-            "Ultimi prodotti:",
-            ...latestLines
+            "📌 Ultimi prodotti",
+            ...latestLines.join("\n\n").split("\n")
           ]
         : [
             "🧭 Vine Watcher dashboard",
             "",
-            `Saved products: ${totals.total || 0}`,
-            `Notified products: ${totals.notified || 0}`,
-            `Best stored score: ${totals.max_score === null || totals.max_score === undefined ? "n/a" : totals.max_score}`,
+            "📦 Archive",
+            `• Saved products: ${totals.total || 0}`,
+            `• Notified products: ${totals.notified || 0}`,
+            `• Best stored score: ${totals.max_score === null || totals.max_score === undefined ? "n/a" : totals.max_score}`,
             memoryLine,
             "",
-            "Recent cycles:",
+            "🕒 Recent cycles",
             ...cycleLines,
             "",
-            "Latest products:",
-            ...latestLines
+            "📌 Latest products",
+            ...latestLines.join("\n\n").split("\n")
           ]
     ).join("\n");
   }

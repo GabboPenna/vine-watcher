@@ -6,6 +6,10 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+### Changed
+
+- Polished Telegram Control diagnostic messages with clearer sections, scan-friendly product rows, and friendlier emoji labels.
+
 ## [0.3.0] - 2026-06-23
 
 ### Changed
