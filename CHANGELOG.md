@@ -6,6 +6,16 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.5.1] - 2026-06-25
+
+### Added
+
+- Added `SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE` to use parallel section scanning and reusable section pages only during adaptive active windows.
+
+### Changed
+
+- Idle adaptive cycles can now run with the lighter serial scanner while active drop windows still use the fast parallel scanner.
+
 ## [0.5.0] - 2026-06-25
 
 ### Added

@@ -138,6 +138,7 @@ function safeConfigSnapshot(config) {
     maxNotificationsPerCycle: config.maxNotificationsPerCycle,
     sectionScanConcurrency: config.sectionScanConcurrency,
     reuseSectionPages: config.reuseSectionPages,
+    scannerTurboOnlyDuringAdaptiveActive: config.scannerTurboOnlyDuringAdaptiveActive,
     scoringRulesLoaded: config.scoringRulesLoaded,
     sections: config.sections.map((section) => section.name)
   };
@@ -187,11 +188,47 @@ function updateAdaptiveState(adaptiveState, summary, config) {
   return adaptiveState;
 }
 
-async function runCycle({ scanner, storage, telegram, config, logger, dryRun = false, layoutHealthState = null }) {
+function isAdaptiveActiveCycle(config, adaptiveState = null) {
+  return Boolean(config.adaptiveScanEnabled && adaptiveState && adaptiveState.activeCyclesRemaining > 0);
+}
+
+function scannerConfigForCycle(config, adaptiveState = null) {
+  const adaptiveActive = isAdaptiveActiveCycle(config, adaptiveState);
+  if (!config.scannerTurboOnlyDuringAdaptiveActive || adaptiveActive) {
+    return {
+      config,
+      adaptiveActive,
+      turboEnabled: true
+    };
+  }
+
+  return {
+    config: {
+      ...config,
+      sectionScanConcurrency: 1,
+      reuseSectionPages: false
+    },
+    adaptiveActive,
+    turboEnabled: false
+  };
+}
+
+async function runCycle({
+  scanner,
+  storage,
+  telegram,
+  config,
+  logger,
+  dryRun = false,
+  layoutHealthState = null,
+  adaptiveState = null
+}) {
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
   const inventoryAt = startedAtIso;
   const configSnapshot = safeConfigSnapshot(config);
+  const scannerCycle = scannerConfigForCycle(config, adaptiveState);
+  const scanConfig = scannerCycle.config;
   let scanned = 0;
   let newProducts = 0;
   let notified = 0;
@@ -203,6 +240,20 @@ async function runCycle({ scanner, storage, telegram, config, logger, dryRun = f
   let skippedNotificationLimit = 0;
   let telegramFailures = 0;
   const sections = [];
+
+  if (scanner.config !== scanConfig) {
+    scanner.config = scanConfig;
+  }
+  if (!scanConfig.reuseSectionPages && scanner.close) {
+    await scanner.close();
+  }
+  if (config.scannerTurboOnlyDuringAdaptiveActive) {
+    logger.info(
+      scannerCycle.turboEnabled
+        ? "Scanner turbo enabled for adaptive active cycle"
+        : "Scanner turbo sleeping until adaptive active cycle"
+    );
+  }
 
   async function processSectionProducts(section, products) {
     scanned += products.length;
@@ -325,17 +376,17 @@ async function runCycle({ scanner, storage, telegram, config, logger, dryRun = f
     };
   }
 
-  const sectionScanConcurrency = Math.max(1, Math.floor(Number(config.sectionScanConcurrency || 1)));
-  if (sectionScanConcurrency <= 1 || config.sections.length <= 1) {
-    for (const section of config.sections) {
+  const sectionScanConcurrency = Math.max(1, Math.floor(Number(scanConfig.sectionScanConcurrency || 1)));
+  if (sectionScanConcurrency <= 1 || scanConfig.sections.length <= 1) {
+    for (const section of scanConfig.sections) {
       const result = await scanSection(section);
       await processSectionProducts(result.section, result.products);
-      if (config.sectionDelayMs > 0) {
-        await sleep(config.sectionDelayMs);
+      if (scanConfig.sectionDelayMs > 0) {
+        await sleep(scanConfig.sectionDelayMs);
       }
     }
   } else {
-    const queue = [...config.sections];
+    const queue = [...scanConfig.sections];
     const active = new Set();
     const concurrency = Math.min(sectionScanConcurrency, queue.length);
 
@@ -370,8 +421,8 @@ async function runCycle({ scanner, storage, telegram, config, logger, dryRun = f
         throw settled.error;
       }
       await processSectionProducts(settled.result.section, settled.result.products);
-      if (config.sectionDelayMs > 0 && queue.length > 0) {
-        await sleep(config.sectionDelayMs);
+      if (scanConfig.sectionDelayMs > 0 && queue.length > 0) {
+        await sleep(scanConfig.sectionDelayMs);
       }
       startNextSection();
     }
@@ -621,7 +672,8 @@ async function main() {
         config: effectiveConfig,
         logger,
         dryRun,
-        layoutHealthState
+        layoutHealthState,
+        adaptiveState
       });
       storage.recordScanCycle(runtimeStatus.lastCycle);
       if (runtimeStatus.lastCycle.scanned <= effectiveConfig.layoutHealthMinProducts) {
@@ -799,5 +851,6 @@ module.exports = {
   nextScanDelayMs,
   runCycle,
   safeConfigSnapshot,
+  scannerConfigForCycle,
   shouldDeferSessionAttention
 };

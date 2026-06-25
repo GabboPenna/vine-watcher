@@ -148,6 +148,7 @@ PAGE_SETTLE_SECONDS=1
 SECTION_DELAY_SECONDS=1
 SECTION_SCAN_CONCURRENCY=1
 REUSE_SECTION_PAGES=false
+SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE=false
 BROWSER_RESTART_INTERVAL_MINUTES=180
 BROWSER_MEMORY_RECYCLE_MB=0
 BROWSER_MEMORY_RECYCLE_COOLDOWN_MINUTES=10
@@ -196,6 +197,16 @@ PRODUCT_READY_TIMEOUT_SECONDS=2
 `SECTION_SCAN_CONCURRENCY=2` starts `Recommended for you` and `Additional items` together. The watcher processes whichever section finishes first, so a fast `Additional items` result can notify without waiting for `Recommended for you`.
 
 `REUSE_SECTION_PAGES=true` keeps a dedicated Chromium page open for each section and navigates it again on the next cycle instead of creating and closing a new page every time. If a reused page errors, Vine Watcher discards it and creates a fresh one on the next scan.
+
+To keep resource use lower while Vine is quiet, enable turbo scanning only during adaptive active windows:
+
+```bash
+SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE=true
+SECTION_SCAN_CONCURRENCY=2
+REUSE_SECTION_PAGES=true
+```
+
+With this setup idle cycles scan serially and close reusable section tabs. When adaptive active starts, Vine Watcher switches to parallel section scanning and reusable tabs for the fast drop window.
 
 Adaptive scanning can speed up briefly when the watcher sees movement and slow down after repeated idle cycles:
 

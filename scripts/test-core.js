@@ -12,6 +12,7 @@ const {
   isTimeWindowActive,
   notificationTriggers,
   runCycle,
+  scannerConfigForCycle,
   shouldDeferSessionAttention
 } = require("../src/index");
 const { applyRuntimeSettings } = require("../src/runtime-config");
@@ -214,7 +215,8 @@ function testRuntimeSettings() {
     control_language: "it",
     panic_scan_interval_seconds: "2",
     section_scan_concurrency: "2",
-    reuse_section_pages: "true"
+    reuse_section_pages: "true",
+    scanner_turbo_only_during_adaptive_active: "true"
   });
 
   assert.equal(config.notifyAllProducts, true);
@@ -225,6 +227,7 @@ function testRuntimeSettings() {
   assert.equal(config.panicScanIntervalSeconds, 5);
   assert.equal(config.sectionScanConcurrency, 2);
   assert.equal(config.reuseSectionPages, true);
+  assert.equal(config.scannerTurboOnlyDuringAdaptiveActive, true);
 }
 
 function testExternalScoringRules() {
@@ -977,6 +980,31 @@ async function testRunCycleParallelProcessesFirstCompletedSection() {
   assert.equal(summary.notified, 1);
 }
 
+function testScannerTurboOnlyDuringAdaptiveActive() {
+  const config = loadConfig({
+    adaptiveScanEnabled: true,
+    scannerTurboOnlyDuringAdaptiveActive: true,
+    sectionScanConcurrency: 2,
+    reuseSectionPages: true
+  });
+
+  const idle = scannerConfigForCycle(config, {
+    activeCyclesRemaining: 0
+  });
+  assert.equal(idle.adaptiveActive, false);
+  assert.equal(idle.turboEnabled, false);
+  assert.equal(idle.config.sectionScanConcurrency, 1);
+  assert.equal(idle.config.reuseSectionPages, false);
+
+  const active = scannerConfigForCycle(config, {
+    activeCyclesRemaining: 3
+  });
+  assert.equal(active.adaptiveActive, true);
+  assert.equal(active.turboEnabled, true);
+  assert.equal(active.config.sectionScanConcurrency, 2);
+  assert.equal(active.config.reuseSectionPages, true);
+}
+
 async function testScannerReusesSectionPages() {
   let created = 0;
   let closed = 0;
@@ -1053,6 +1081,7 @@ async function main() {
   testSessionAttentionDeferral();
   await testRunCycleNotifiesAfterEachSection();
   await testRunCycleParallelProcessesFirstCompletedSection();
+  testScannerTurboOnlyDuringAdaptiveActive();
   await testScannerReusesSectionPages();
   console.log("Core tests OK");
 }

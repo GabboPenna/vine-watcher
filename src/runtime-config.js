@@ -30,6 +30,7 @@ const USER_SETTING_KEYS = [
   "section_delay_seconds",
   "section_scan_concurrency",
   "reuse_section_pages",
+  "scanner_turbo_only_during_adaptive_active",
   "browser_restart_interval_minutes",
   "browser_memory_recycle_mb",
   "browser_memory_recycle_cooldown_minutes",
@@ -184,6 +185,12 @@ function applyRuntimeSettings(baseConfig, settings = {}) {
   }
   if (settings.reuse_section_pages !== undefined) {
     config.reuseSectionPages = parseBool(settings.reuse_section_pages, config.reuseSectionPages);
+  }
+  if (settings.scanner_turbo_only_during_adaptive_active !== undefined) {
+    config.scannerTurboOnlyDuringAdaptiveActive = parseBool(
+      settings.scanner_turbo_only_during_adaptive_active,
+      config.scannerTurboOnlyDuringAdaptiveActive
+    );
   }
   if (settings.browser_restart_interval_minutes !== undefined) {
     config.browserRestartIntervalMs =

@@ -86,6 +86,7 @@ SCAN_JITTER_SECONDS=10
 ADAPTIVE_SCAN_ENABLED=false
 SECTION_SCAN_CONCURRENCY=1
 REUSE_SECTION_PAGES=false
+SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE=false
 MIN_SCORE_TO_NOTIFY=20
 MIN_VALUE_TO_NOTIFY_EUR=50
 NOTIFY_ALL_PRODUCTS=false
@@ -208,7 +209,7 @@ Published image:
 docker pull gabrielepennacchia/vine-watcher:latest
 ```
 
-Release tags are published from semver Git tags such as `v0.5.0`.
+Release tags are published from semver Git tags such as `v0.5.1`.
 
 ## Project Layout
 
