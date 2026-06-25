@@ -837,6 +837,8 @@ function loadConfig(overrides = {}) {
     productReadyTimeoutMs: parseNumber(readEnv("PRODUCT_READY_TIMEOUT_SECONDS", "5"), 5, 1) * 1000,
     pageSettleMs: parseNumber(readEnv("PAGE_SETTLE_SECONDS", "1"), 1, 0) * 1000,
     sectionDelayMs: parseNumber(readEnv("SECTION_DELAY_SECONDS", "1"), 1, 0) * 1000,
+    sectionScanConcurrency: parseNumber(readEnv("SECTION_SCAN_CONCURRENCY", "1"), 1, 1),
+    reuseSectionPages: parseBool(readEnv("REUSE_SECTION_PAGES", "false"), false),
     browserRestartIntervalMs:
       parseNumber(readEnv("BROWSER_RESTART_INTERVAL_MINUTES", "180"), 180, 0) * 60 * 1000,
     browserMemoryRecycleMb: parseNumber(readEnv("BROWSER_MEMORY_RECYCLE_MB", "0"), 0, 0),

@@ -19,6 +19,7 @@ Vine Watcher monitors the Amazon Vine sections already available to your logged-
 - Supports estimated-value alerts when the visible Vine card exposes a value.
 - Stores notification decisions, triggers, blockers, and a safe config snapshot for debugging.
 - Includes dry-run scans, layout-health warnings, SQLite retention, and a local read-only health API.
+- Can scan sections in parallel and reuse Chromium tabs for lower notification latency.
 - Runs on Debian with systemd or with Docker Compose.
 - Uses a persistent Chromium profile created by manual login.
 - Uses headed Chromium inside a virtual display for the systemd service to reduce false Amazon login redirects.
@@ -83,6 +84,8 @@ Important defaults:
 SCAN_INTERVAL_SECONDS=30
 SCAN_JITTER_SECONDS=10
 ADAPTIVE_SCAN_ENABLED=false
+SECTION_SCAN_CONCURRENCY=1
+REUSE_SECTION_PAGES=false
 MIN_SCORE_TO_NOTIFY=20
 MIN_VALUE_TO_NOTIFY_EUR=50
 NOTIFY_ALL_PRODUCTS=false
@@ -205,7 +208,7 @@ Published image:
 docker pull gabrielepennacchia/vine-watcher:latest
 ```
 
-Release tags are published from semver Git tags such as `v0.4.1`.
+Release tags are published from semver Git tags such as `v0.5.0`.
 
 ## Project Layout
 

@@ -212,7 +212,9 @@ function testRuntimeSettings() {
     min_score_to_notify: "5",
     min_value_to_notify_eur: "35",
     control_language: "it",
-    panic_scan_interval_seconds: "2"
+    panic_scan_interval_seconds: "2",
+    section_scan_concurrency: "2",
+    reuse_section_pages: "true"
   });
 
   assert.equal(config.notifyAllProducts, true);
@@ -221,6 +223,8 @@ function testRuntimeSettings() {
   assert.equal(config.minValueToNotifyEur, 35);
   assert.equal(config.telegramControlLanguage, "it");
   assert.equal(config.panicScanIntervalSeconds, 5);
+  assert.equal(config.sectionScanConcurrency, 2);
+  assert.equal(config.reuseSectionPages, true);
 }
 
 function testExternalScoringRules() {
@@ -897,6 +901,143 @@ async function testRunCycleNotifiesAfterEachSection() {
   );
 }
 
+async function testRunCycleParallelProcessesFirstCompletedSection() {
+  const events = [];
+  const config = loadConfig({
+    sections: [
+      { name: "Slow RFY", url: "https://www.amazon.it/vine/vine-items?queue=potluck" },
+      { name: "Fast AI", url: "https://www.amazon.it/vine/vine-items?queue=encore" }
+    ],
+    notifyAllProducts: true,
+    maxNotificationsPerCycle: 5,
+    sectionDelayMs: 0,
+    sectionScanConcurrency: 2
+  });
+  const product = {
+    id: 2,
+    asin: "B0FASTVINE",
+    title: "Fast section product",
+    section: "Fast AI",
+    section_url: "https://www.amazon.it/vine/vine-items?queue=encore",
+    estimated_value_eur: null
+  };
+  const scanner = {
+    async scanSection(section) {
+      events.push(`scan:${section.name}`);
+      if (section.name === "Slow RFY") {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        events.push(`done:${section.name}`);
+        return [];
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      events.push(`done:${section.name}`);
+      return [product];
+    }
+  };
+  const storage = {
+    findExisting() {
+      return null;
+    },
+    saveProduct(savedProduct) {
+      events.push(`save:${savedProduct.title}`);
+      return {
+        isNew: true,
+        product: {
+          ...savedProduct,
+          id: 2,
+          notified: 0
+        }
+      };
+    },
+    markNotified(productId) {
+      events.push(`mark:${productId}`);
+    },
+    markMissingProducts() {
+      events.push("missing:0");
+      return 0;
+    }
+  };
+  const telegram = {
+    async sendProduct(sentProduct) {
+      events.push(`notify:${sentProduct.id}`);
+      return true;
+    }
+  };
+
+  const summary = await runCycle({
+    scanner,
+    storage,
+    telegram,
+    config,
+    logger: silentLogger
+  });
+
+  assert.ok(events.indexOf("notify:2") < events.indexOf("done:Slow RFY"));
+  assert.equal(summary.scanned, 1);
+  assert.equal(summary.notified, 1);
+}
+
+async function testScannerReusesSectionPages() {
+  let created = 0;
+  let closed = 0;
+  const section = {
+    name: "Additional items",
+    url: "https://www.amazon.it/vine/vine-items?queue=encore"
+  };
+  function makePage() {
+    return {
+      closed: false,
+      isClosed() {
+        return this.closed;
+      },
+      async goto() {
+        return null;
+      },
+      async waitForLoadState() {},
+      async waitForTimeout() {},
+      async waitForFunction() {},
+      async evaluate() {
+        return [
+          {
+            asin: "B002KTID3A",
+            title: "Bosch drill bit set",
+            url: "/dp/B002KTID3A",
+            raw_text: "Bosch drill bit set"
+          }
+        ];
+      },
+      async close() {
+        this.closed = true;
+        closed += 1;
+      }
+    };
+  }
+
+  const scanner = new VineScanner({
+    context: {
+      async newPage() {
+        created += 1;
+        return makePage();
+      }
+    },
+    config: loadConfig({
+      reuseSectionPages: true,
+      waitForNetworkIdle: false,
+      pageSettleMs: 0,
+      pageTimeoutMs: 1000,
+      productReadyTimeoutMs: 1000
+    }),
+    logger: silentLogger
+  });
+  scanner.assertSessionReady = async () => {};
+
+  assert.equal((await scanner.scanSection(section)).length, 1);
+  assert.equal((await scanner.scanSection(section)).length, 1);
+  assert.equal(created, 1);
+  await scanner.close();
+  assert.equal(closed, 1);
+}
+
 async function main() {
   testEuroParsing();
   testUrlCanonicalization();
@@ -911,6 +1052,8 @@ async function main() {
   testSessionStatusClassification();
   testSessionAttentionDeferral();
   await testRunCycleNotifiesAfterEachSection();
+  await testRunCycleParallelProcessesFirstCompletedSection();
+  await testScannerReusesSectionPages();
   console.log("Core tests OK");
 }
 

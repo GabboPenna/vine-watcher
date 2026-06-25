@@ -116,6 +116,7 @@ class VineScanner {
     this.context = context;
     this.config = config;
     this.logger = logger;
+    this.sectionPages = new Map();
   }
 
   async scanAllSections() {
@@ -131,7 +132,8 @@ class VineScanner {
   }
 
   async scanSection(section) {
-    const page = await this.context.newPage();
+    const reusePage = Boolean(this.config.reuseSectionPages);
+    const page = await this.pageForSection(section, reusePage);
     try {
       this.logger.info(`Scanning "${section.name}"`);
       const response = await page.goto(section.url, {
@@ -174,6 +176,9 @@ class VineScanner {
       this.logger.info(`Section "${section.name}" scanned: ${unique.length} product candidates`);
       return unique;
     } catch (error) {
+      if (reusePage) {
+        await this.discardSectionPage(section, page);
+      }
       if (error instanceof SessionNeedsAttentionError) {
         throw error;
       }
@@ -182,8 +187,44 @@ class VineScanner {
       }
       throw error;
     } finally {
-      await page.close().catch(() => {});
+      if (!reusePage) {
+        await page.close().catch(() => {});
+      }
     }
+  }
+
+  sectionPageKey(section) {
+    return `${section.name}\n${section.url || ""}`;
+  }
+
+  async pageForSection(section, reusePage) {
+    if (!reusePage) {
+      return this.context.newPage();
+    }
+
+    const key = this.sectionPageKey(section);
+    const existing = this.sectionPages.get(key);
+    if (existing && !existing.isClosed()) {
+      return existing;
+    }
+
+    const page = await this.context.newPage();
+    this.sectionPages.set(key, page);
+    return page;
+  }
+
+  async discardSectionPage(section, page) {
+    const key = this.sectionPageKey(section);
+    if (this.sectionPages.get(key) === page) {
+      this.sectionPages.delete(key);
+    }
+    await page.close().catch(() => {});
+  }
+
+  async close() {
+    const pages = Array.from(this.sectionPages.values());
+    this.sectionPages.clear();
+    await Promise.all(pages.map((page) => page.close().catch(() => {})));
   }
 
   async waitForReadableDom(page, section) {

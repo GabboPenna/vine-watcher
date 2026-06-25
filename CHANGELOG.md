@@ -6,6 +6,20 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.5.0] - 2026-06-25
+
+### Added
+
+- Added parallel Vine section scanning with `SECTION_SCAN_CONCURRENCY`.
+- Added reusable Chromium section pages with `REUSE_SECTION_PAGES`.
+- Added runtime overrides for section scan concurrency and reusable section pages.
+- Added tests for parallel section processing and reusable scanner pages.
+
+### Changed
+
+- The cycle processor can now notify products from the first completed section without waiting for slower sections.
+- Telegram `/config` now shows section concurrency and reusable page mode.
+
 ## [0.4.1] - 2026-06-23
 
 ### Added

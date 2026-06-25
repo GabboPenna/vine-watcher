@@ -136,6 +136,8 @@ function safeConfigSnapshot(config) {
     strictMinPositiveSignals: config.strictMinPositiveSignals,
     strictMaxNegativeSignals: config.strictMaxNegativeSignals,
     maxNotificationsPerCycle: config.maxNotificationsPerCycle,
+    sectionScanConcurrency: config.sectionScanConcurrency,
+    reuseSectionPages: config.reuseSectionPages,
     scoringRulesLoaded: config.scoringRulesLoaded,
     sections: config.sections.map((section) => section.name)
   };
@@ -202,8 +204,7 @@ async function runCycle({ scanner, storage, telegram, config, logger, dryRun = f
   let telegramFailures = 0;
   const sections = [];
 
-  for (const section of config.sections) {
-    const products = await scanner.scanSection(section);
+  async function processSectionProducts(section, products) {
     scanned += products.length;
     sections.push({
       name: section.name,
@@ -314,8 +315,65 @@ async function runCycle({ scanner, storage, telegram, config, logger, dryRun = f
       }
     }
 
-    if (config.sectionDelayMs > 0) {
-      await sleep(config.sectionDelayMs);
+  }
+
+  async function scanSection(section) {
+    const products = await scanner.scanSection(section);
+    return {
+      section,
+      products
+    };
+  }
+
+  const sectionScanConcurrency = Math.max(1, Math.floor(Number(config.sectionScanConcurrency || 1)));
+  if (sectionScanConcurrency <= 1 || config.sections.length <= 1) {
+    for (const section of config.sections) {
+      const result = await scanSection(section);
+      await processSectionProducts(result.section, result.products);
+      if (config.sectionDelayMs > 0) {
+        await sleep(config.sectionDelayMs);
+      }
+    }
+  } else {
+    const queue = [...config.sections];
+    const active = new Set();
+    const concurrency = Math.min(sectionScanConcurrency, queue.length);
+
+    logger.info(`Scanning up to ${concurrency} Vine sections in parallel`);
+
+    function startNextSection() {
+      if (queue.length === 0 || active.size >= concurrency) {
+        return;
+      }
+      const section = queue.shift();
+      const promise = scanSection(section)
+        .then((result) => ({
+          promise,
+          result
+        }))
+        .catch((error) => ({
+          promise,
+          error,
+          section
+        }));
+      active.add(promise);
+    }
+
+    while (active.size < concurrency && queue.length > 0) {
+      startNextSection();
+    }
+
+    while (active.size > 0) {
+      const settled = await Promise.race(active);
+      active.delete(settled.promise);
+      if (settled.error) {
+        throw settled.error;
+      }
+      await processSectionProducts(settled.result.section, settled.result.products);
+      if (config.sectionDelayMs > 0 && queue.length > 0) {
+        await sleep(config.sectionDelayMs);
+      }
+      startNextSection();
     }
   }
 
@@ -452,8 +510,12 @@ async function main() {
   async function openBrowserContext(reason) {
     if (context) {
       logger.info(`Closing Chromium context before reopening (${reason})`);
+      if (scanner && scanner.close) {
+        await scanner.close().catch((error) => logger.warn(`Scanner page cleanup failed: ${error.message}`));
+      }
       await context.close().catch((error) => logger.warn(`Browser close failed: ${error.message}`));
       context = null;
+      scanner = null;
     }
 
     refreshConfig();
@@ -482,6 +544,10 @@ async function main() {
     }
     if (healthServer) {
       await new Promise((resolve) => healthServer.close(resolve)).catch(() => {});
+    }
+    if (scanner && scanner.close) {
+      await scanner.close().catch((error) => logger.warn(`Scanner page cleanup failed: ${error.message}`));
+      scanner = null;
     }
     if (context) {
       await context.close().catch((error) => logger.warn(`Browser close failed: ${error.message}`));
@@ -708,6 +774,9 @@ async function main() {
   } while (!shuttingDown);
 
   if (context) {
+    if (scanner && scanner.close) {
+      await scanner.close().catch((error) => logger.warn(`Scanner page cleanup failed: ${error.message}`));
+    }
     await context.close();
   }
   if (control) {

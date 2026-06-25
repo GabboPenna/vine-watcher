@@ -28,6 +28,8 @@ const USER_SETTING_KEYS = [
   "product_ready_timeout_seconds",
   "page_settle_seconds",
   "section_delay_seconds",
+  "section_scan_concurrency",
+  "reuse_section_pages",
   "browser_restart_interval_minutes",
   "browser_memory_recycle_mb",
   "browser_memory_recycle_cooldown_minutes",
@@ -172,6 +174,16 @@ function applyRuntimeSettings(baseConfig, settings = {}) {
   }
   if (settings.section_delay_seconds !== undefined) {
     config.sectionDelayMs = parseNumber(settings.section_delay_seconds, config.sectionDelayMs / 1000, 0) * 1000;
+  }
+  if (settings.section_scan_concurrency !== undefined) {
+    config.sectionScanConcurrency = parseNumber(
+      settings.section_scan_concurrency,
+      config.sectionScanConcurrency,
+      1
+    );
+  }
+  if (settings.reuse_section_pages !== undefined) {
+    config.reuseSectionPages = parseBool(settings.reuse_section_pages, config.reuseSectionPages);
   }
   if (settings.browser_restart_interval_minutes !== undefined) {
     config.browserRestartIntervalMs =
