@@ -142,6 +142,7 @@ ADAPTIVE_ACTIVE_CYCLES=3
 ADAPTIVE_ACTIVE_INTERVAL_SECONDS=15
 ADAPTIVE_ACTIVE_JITTER_SECONDS=3
 PAGE_TIMEOUT_SECONDS=45
+SECTION_HARD_TIMEOUT_SECONDS=0
 WAIT_FOR_NETWORK_IDLE=false
 PRODUCT_READY_TIMEOUT_SECONDS=5
 PAGE_SETTLE_SECONDS=1
@@ -207,6 +208,8 @@ REUSE_SECTION_PAGES=true
 ```
 
 With this setup idle cycles scan serially and close reusable section tabs. When adaptive active starts, Vine Watcher switches to parallel section scanning and reusable tabs for the fast drop window.
+
+`SECTION_HARD_TIMEOUT_SECONDS` is a safety watchdog around the whole section scan. Leave it at `0` for auto mode, which uses `PAGE_TIMEOUT_SECONDS` plus a margin. Set it explicitly on small hosts if Chromium ever gets stuck after an Amazon navigation timeout; the watcher will close the stuck page instead of letting a renderer grow until the service is killed.
 
 Adaptive scanning can speed up briefly when the watcher sees movement and slow down after repeated idle cycles:
 

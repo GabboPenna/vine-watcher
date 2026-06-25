@@ -833,6 +833,7 @@ function loadConfig(overrides = {}) {
     headless: parseBool(readEnv("HEADLESS", "false"), false),
     chromiumNoSandbox: parseBool(readEnv("CHROMIUM_NO_SANDBOX", "false"), false),
     pageTimeoutMs: parseNumber(readEnv("PAGE_TIMEOUT_SECONDS", "45"), 45, 5) * 1000,
+    sectionHardTimeoutMs: parseNumber(readEnv("SECTION_HARD_TIMEOUT_SECONDS", "0"), 0, 0) * 1000,
     waitForNetworkIdle: parseBool(readEnv("WAIT_FOR_NETWORK_IDLE", "false"), false),
     productReadyTimeoutMs: parseNumber(readEnv("PRODUCT_READY_TIMEOUT_SECONDS", "5"), 5, 1) * 1000,
     pageSettleMs: parseNumber(readEnv("PAGE_SETTLE_SECONDS", "1"), 1, 0) * 1000,

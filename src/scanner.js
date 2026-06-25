@@ -22,8 +22,34 @@ class SessionNeedsAttentionError extends Error {
   }
 }
 
+class SectionScanTimeoutError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = "SectionScanTimeoutError";
+    this.details = details;
+  }
+}
+
 function isBrowserClosedError(error) {
   return /Target page, context or browser has been closed/i.test(error && error.message ? error.message : String(error));
+}
+
+function sectionHardTimeoutMs(config) {
+  if (config.sectionHardTimeoutMs && config.sectionHardTimeoutMs > 0) {
+    return config.sectionHardTimeoutMs;
+  }
+
+  const pageTimeoutMs = Math.max(5000, Number(config.pageTimeoutMs) || 45000);
+  return pageTimeoutMs + Math.max(5000, Math.ceil(pageTimeoutMs * 0.5));
+}
+
+async function closePageQuietly(page, timeoutMs = 3000) {
+  if (!page || page.isClosed()) {
+    return;
+  }
+
+  const closePromise = page.close().catch(() => {});
+  await Promise.race([closePromise, sleep(timeoutMs)]);
 }
 
 function summarizeSessionStatus(status = {}) {
@@ -134,47 +160,29 @@ class VineScanner {
   async scanSection(section) {
     const reusePage = Boolean(this.config.reuseSectionPages);
     const page = await this.pageForSection(section, reusePage);
+    const hardTimeoutMs = sectionHardTimeoutMs(this.config);
+    let watchdogTimer = null;
+    let watchdogTriggered = false;
+
+    const watchdog = new Promise((_, reject) => {
+      watchdogTimer = setTimeout(() => {
+        watchdogTriggered = true;
+        const error = new SectionScanTimeoutError(
+          `Section "${section.name}" exceeded hard timeout after ${hardTimeoutMs}ms`,
+          {
+            sectionName: section.name,
+            sectionUrl: section.url,
+            hardTimeoutMs
+          }
+        );
+        this.logger.warn(`${error.message}; closing the page to avoid a stuck Chromium renderer`);
+        closePageQuietly(page).catch(() => {});
+        reject(error);
+      }, hardTimeoutMs);
+    });
+
     try {
-      this.logger.info(`Scanning "${section.name}"`);
-      const response = await page.goto(section.url, {
-        waitUntil: "domcontentloaded",
-        timeout: this.config.pageTimeoutMs
-      });
-
-      if (response && response.status() >= 500) {
-        this.logger.warn(`Amazon returned HTTP ${response.status()} for ${section.name}`);
-      }
-
-      await this.waitForReadableDom(page, section);
-
-      if (this.config.waitForNetworkIdle) {
-        await page
-          .waitForLoadState("networkidle", {
-            timeout: Math.min(this.config.pageTimeoutMs, 15000)
-          })
-          .catch(() => {
-            this.logger.debug(`Network did not become idle for "${section.name}"; continuing with DOM read`);
-          });
-      }
-
-      if (this.config.pageSettleMs > 0) {
-        await page.waitForTimeout(this.config.pageSettleMs);
-      }
-
-      await this.assertSessionReady(page, section);
-
-      const rawProducts = await page.evaluate(extractProductsFromPage, {
-        sectionName: section.name,
-        sectionUrl: section.url
-      });
-
-      const products = rawProducts
-        .map((product) => this.normalizeProduct(product, section))
-        .filter((product) => product.title && (product.asin || product.url));
-
-      const unique = uniqueProducts(products);
-      this.logger.info(`Section "${section.name}" scanned: ${unique.length} product candidates`);
-      return unique;
+      return await Promise.race([this.scanSectionWithPage(section, page), watchdog]);
     } catch (error) {
       if (reusePage) {
         await this.discardSectionPage(section, page);
@@ -187,10 +195,54 @@ class VineScanner {
       }
       throw error;
     } finally {
-      if (!reusePage) {
-        await page.close().catch(() => {});
+      clearTimeout(watchdogTimer);
+      if (!reusePage && !watchdogTriggered) {
+        await closePageQuietly(page);
       }
     }
+  }
+
+  async scanSectionWithPage(section, page) {
+    this.logger.info(`Scanning "${section.name}"`);
+    const response = await page.goto(section.url, {
+      waitUntil: "domcontentloaded",
+      timeout: this.config.pageTimeoutMs
+    });
+
+    if (response && response.status() >= 500) {
+      this.logger.warn(`Amazon returned HTTP ${response.status()} for ${section.name}`);
+    }
+
+    await this.waitForReadableDom(page, section);
+
+    if (this.config.waitForNetworkIdle) {
+      await page
+        .waitForLoadState("networkidle", {
+          timeout: Math.min(this.config.pageTimeoutMs, 15000)
+        })
+        .catch(() => {
+          this.logger.debug(`Network did not become idle for "${section.name}"; continuing with DOM read`);
+        });
+    }
+
+    if (this.config.pageSettleMs > 0) {
+      await page.waitForTimeout(this.config.pageSettleMs);
+    }
+
+    await this.assertSessionReady(page, section);
+
+    const rawProducts = await page.evaluate(extractProductsFromPage, {
+      sectionName: section.name,
+      sectionUrl: section.url
+    });
+
+    const products = rawProducts
+      .map((product) => this.normalizeProduct(product, section))
+      .filter((product) => product.title && (product.asin || product.url));
+
+    const unique = uniqueProducts(products);
+    this.logger.info(`Section "${section.name}" scanned: ${unique.length} product candidates`);
+    return unique;
   }
 
   sectionPageKey(section) {
@@ -218,13 +270,13 @@ class VineScanner {
     if (this.sectionPages.get(key) === page) {
       this.sectionPages.delete(key);
     }
-    await page.close().catch(() => {});
+    await closePageQuietly(page);
   }
 
   async close() {
     const pages = Array.from(this.sectionPages.values());
     this.sectionPages.clear();
-    await Promise.all(pages.map((page) => page.close().catch(() => {})));
+    await Promise.all(pages.map((page) => closePageQuietly(page)));
   }
 
   async waitForReadableDom(page, section) {
@@ -345,7 +397,7 @@ class VineScanner {
         classification
       };
     } finally {
-      await page.close().catch(() => {});
+      await closePageQuietly(page);
     }
   }
 }
@@ -629,7 +681,9 @@ function extractProductsFromPage(args) {
 module.exports = {
   classifySessionStatus,
   isBrowserClosedError,
+  SectionScanTimeoutError,
   SessionNeedsAttentionError,
+  sectionHardTimeoutMs,
   summarizeSessionStatus,
   VineScanner
 };

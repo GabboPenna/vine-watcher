@@ -25,6 +25,7 @@ const USER_SETTING_KEYS = [
   "adaptive_active_interval_seconds",
   "adaptive_active_jitter_seconds",
   "page_timeout_seconds",
+  "section_hard_timeout_seconds",
   "product_ready_timeout_seconds",
   "page_settle_seconds",
   "section_delay_seconds",
@@ -165,6 +166,10 @@ function applyRuntimeSettings(baseConfig, settings = {}) {
   }
   if (settings.page_timeout_seconds !== undefined) {
     config.pageTimeoutMs = parseNumber(settings.page_timeout_seconds, config.pageTimeoutMs / 1000, 5) * 1000;
+  }
+  if (settings.section_hard_timeout_seconds !== undefined) {
+    config.sectionHardTimeoutMs =
+      parseNumber(settings.section_hard_timeout_seconds, config.sectionHardTimeoutMs / 1000, 0) * 1000;
   }
   if (settings.product_ready_timeout_seconds !== undefined) {
     config.productReadyTimeoutMs =

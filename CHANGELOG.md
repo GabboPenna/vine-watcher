@@ -6,6 +6,16 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.5.2] - 2026-06-25
+
+### Added
+
+- Added `SECTION_HARD_TIMEOUT_SECONDS`, a section-level watchdog that closes stuck Chromium pages when a Vine section scan exceeds its hard deadline.
+
+### Changed
+
+- Scanner page closing now uses a bounded close helper so cleanup cannot hang indefinitely on stuck Chromium pages.
+
 ## [0.5.1] - 2026-06-25
 
 ### Added

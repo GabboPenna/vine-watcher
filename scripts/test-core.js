@@ -16,7 +16,7 @@ const {
   shouldDeferSessionAttention
 } = require("../src/index");
 const { applyRuntimeSettings } = require("../src/runtime-config");
-const { classifySessionStatus, VineScanner } = require("../src/scanner");
+const { classifySessionStatus, sectionHardTimeoutMs, VineScanner } = require("../src/scanner");
 const { scoreProduct } = require("../src/scorer");
 const { ProductStorage } = require("../src/storage");
 const { TelegramClient } = require("../src/telegram");
@@ -214,6 +214,7 @@ function testRuntimeSettings() {
     min_value_to_notify_eur: "35",
     control_language: "it",
     panic_scan_interval_seconds: "2",
+    section_hard_timeout_seconds: "24",
     section_scan_concurrency: "2",
     reuse_section_pages: "true",
     scanner_turbo_only_during_adaptive_active: "true"
@@ -225,6 +226,7 @@ function testRuntimeSettings() {
   assert.equal(config.minValueToNotifyEur, 35);
   assert.equal(config.telegramControlLanguage, "it");
   assert.equal(config.panicScanIntervalSeconds, 5);
+  assert.equal(config.sectionHardTimeoutMs, 24000);
   assert.equal(config.sectionScanConcurrency, 2);
   assert.equal(config.reuseSectionPages, true);
   assert.equal(config.scannerTurboOnlyDuringAdaptiveActive, true);
@@ -1005,6 +1007,46 @@ function testScannerTurboOnlyDuringAdaptiveActive() {
   assert.equal(active.config.reuseSectionPages, true);
 }
 
+async function testScannerHardTimeoutClosesStuckPage() {
+  let closed = 0;
+  const section = {
+    name: "Additional items",
+    url: "https://www.amazon.it/vine/vine-items?queue=encore"
+  };
+  const page = {
+    closed: false,
+    isClosed() {
+      return this.closed;
+    },
+    async goto() {
+      return new Promise(() => {});
+    },
+    async close() {
+      this.closed = true;
+      closed += 1;
+    }
+  };
+
+  const scanner = new VineScanner({
+    context: {
+      async newPage() {
+        return page;
+      }
+    },
+    config: loadConfig({
+      reuseSectionPages: false,
+      sectionHardTimeoutMs: 20,
+      pageTimeoutMs: 1000
+    }),
+    logger: silentLogger
+  });
+
+  assert.equal(sectionHardTimeoutMs({ pageTimeoutMs: 10000, sectionHardTimeoutMs: 0 }), 15000);
+  assert.equal(sectionHardTimeoutMs({ pageTimeoutMs: 10000, sectionHardTimeoutMs: 7000 }), 7000);
+  await assert.rejects(() => scanner.scanSection(section), /hard timeout/);
+  assert.equal(closed, 1);
+}
+
 async function testScannerReusesSectionPages() {
   let created = 0;
   let closed = 0;
@@ -1082,6 +1124,7 @@ async function main() {
   await testRunCycleNotifiesAfterEachSection();
   await testRunCycleParallelProcessesFirstCompletedSection();
   testScannerTurboOnlyDuringAdaptiveActive();
+  await testScannerHardTimeoutClosesStuckPage();
   await testScannerReusesSectionPages();
   console.log("Core tests OK");
 }

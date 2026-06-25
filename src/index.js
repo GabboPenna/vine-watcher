@@ -136,6 +136,7 @@ function safeConfigSnapshot(config) {
     strictMinPositiveSignals: config.strictMinPositiveSignals,
     strictMaxNegativeSignals: config.strictMaxNegativeSignals,
     maxNotificationsPerCycle: config.maxNotificationsPerCycle,
+    sectionHardTimeoutMs: config.sectionHardTimeoutMs,
     sectionScanConcurrency: config.sectionScanConcurrency,
     reuseSectionPages: config.reuseSectionPages,
     scannerTurboOnlyDuringAdaptiveActive: config.scannerTurboOnlyDuringAdaptiveActive,

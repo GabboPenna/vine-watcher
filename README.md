@@ -84,6 +84,7 @@ Important defaults:
 SCAN_INTERVAL_SECONDS=30
 SCAN_JITTER_SECONDS=10
 ADAPTIVE_SCAN_ENABLED=false
+SECTION_HARD_TIMEOUT_SECONDS=0
 SECTION_SCAN_CONCURRENCY=1
 REUSE_SECTION_PAGES=false
 SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE=false
@@ -209,7 +210,7 @@ Published image:
 docker pull gabrielepennacchia/vine-watcher:latest
 ```
 
-Release tags are published from semver Git tags such as `v0.5.1`.
+Release tags are published from semver Git tags such as `v0.5.2`.
 
 ## Project Layout
 

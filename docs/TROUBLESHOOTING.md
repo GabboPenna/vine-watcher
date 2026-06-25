@@ -69,6 +69,15 @@ SECTION_DELAY_SECONDS=0
 
 Use these carefully. Very aggressive scans may increase Amazon friction.
 
+If Chromium gets stuck and memory/load grows, disable parallel scanning first and use a hard section watchdog:
+
+```bash
+SECTION_SCAN_CONCURRENCY=1
+REUSE_SECTION_PAGES=false
+SECTION_HARD_TIMEOUT_SECONDS=30
+BROWSER_MEMORY_RECYCLE_MB=900
+```
+
 ## Too Many Notifications
 
 Raise thresholds:
