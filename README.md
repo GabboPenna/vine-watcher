@@ -14,9 +14,9 @@ Vine Watcher monitors the Amazon Vine sections already available to your logged-
 - Tracks current inventory state: present, disappeared, and reappeared products.
 - Scores products with keyword, brand, category, and negative-signal rules.
 - Can load extra scoring keywords from JSON or simple YAML files.
-- Sends compact Telegram notifications with score, visible value/price, reasons, ASIN, image when available, and the Vine section URL.
+- Sends compact Telegram notifications with score, estimated Vine value, grouped reasons, ASIN, image when available, and an inline Vine section button.
 - Can be controlled from Telegram with an optional private command interface.
-- Supports estimated-value alerts when the visible Vine card exposes a value.
+- Supports estimated-value alerts from the Vine card or the read-only Vine detail tax value.
 - Stores notification decisions, triggers, blockers, and a safe config snapshot for debugging.
 - Includes dry-run scans, layout-health warnings, SQLite retention, and a local read-only health API.
 - Can scan sections in parallel and reuse Chromium tabs for lower notification latency.
@@ -87,6 +87,9 @@ ADAPTIVE_SCAN_ENABLED=false
 SECTION_HARD_TIMEOUT_SECONDS=0
 SECTION_SCAN_CONCURRENCY=1
 REUSE_SECTION_PAGES=false
+DETAIL_VALUE_LOOKUP_ENABLED=true
+DETAIL_VALUE_LOOKUP_MAX_PER_CYCLE=10
+DETAIL_VALUE_LOOKUP_TIMEOUT_SECONDS=4
 SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE=false
 MIN_SCORE_TO_NOTIFY=20
 MIN_VALUE_TO_NOTIFY_EUR=50
@@ -210,7 +213,7 @@ Published image:
 docker pull gabrielepennacchia/vine-watcher:latest
 ```
 
-Release tags are published from semver Git tags such as `v0.5.4`.
+Release tags are published from semver Git tags such as `v0.6.0`.
 
 ## Project Layout
 

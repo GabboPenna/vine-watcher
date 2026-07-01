@@ -304,6 +304,75 @@ function testScannerFixtures() {
   }
 }
 
+async function testScannerDetailValueLookup() {
+  const calls = [];
+  const scanner = new VineScanner({
+    context: {
+      request: {
+        async get(url, options = {}) {
+          calls.push({ url, timeout: options.timeout });
+          return {
+            ok() {
+              return true;
+            },
+            status() {
+              return 200;
+            },
+            async json() {
+              if (url.includes("/item/")) {
+                return {
+                  result: {
+                    asin: "B0VARIANT1",
+                    imageUrl: "https://m.media-amazon.com/images/I/example._SS180_.jpg",
+                    taxCurrency: "EUR",
+                    taxValue: 24.99
+                  },
+                  error: null
+                };
+              }
+              return {
+                result: {
+                  recommendationId: "APJ#B0PARENT01#vine.enrollment.test",
+                  item: null,
+                  variations: [
+                    {
+                      asin: "B0VARIANT1",
+                      dimensions: {
+                        Color: "Pink"
+                      }
+                    }
+                  ]
+                },
+                error: null
+              };
+            }
+          };
+        }
+      }
+    },
+    config: loadConfig({
+      detailValueLookupEnabled: true,
+      detailValueLookupTimeoutMs: 4000,
+      amazonVineBaseUrl: "https://www.amazon.it/vine/vine-items"
+    }),
+    logger: silentLogger
+  });
+
+  const enriched = await scanner.enrichProductValue({
+    asin: "B0PARENT01",
+    title: "Small desk fan",
+    section_url: "https://www.amazon.it/vine/vine-items?queue=encore",
+    image_url: "",
+    estimated_value_eur: null,
+    vine_recommendation_id: "APJ#B0PARENT01#vine.enrollment.test"
+  });
+
+  assert.equal(enriched.estimated_value_eur, 24.99);
+  assert.equal(enriched.image_url, "https://m.media-amazon.com/images/I/example._SS180_.jpg");
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].url, /\/item\/B0VARIANT1\?imageSize=180$/);
+}
+
 function testStorageEstimatedValue() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vine-watcher-test-"));
   const dbPath = path.join(dir, "products.sqlite");
@@ -717,13 +786,28 @@ function testTelegramFormatting() {
     }
   );
 
-  assert.match(message, /<b>Title<\/b>: Bosch drill bit set/);
-  assert.match(message, /<b>Value\/price<\/b>: \u20ac42\.50/);
-  assert.match(message, /<b>Score<\/b>: 25 \| <b>Signals<\/b>: \+3 \/ -0/);
-  assert.match(message, /<b>Reasons<\/b>: brand: bosch/);
-  assert.match(message, /<b>Triggers<\/b>: estimated value \u20ac42\.50 &gt;= \u20ac35\.00/);
-  assert.match(message, /<b>Open Vine section<\/b>: https:\/\/www\.amazon\.it\/vine\/vine-items\?queue=potluck/);
-  assert.doesNotMatch(message, /<b>Open Vine section<\/b>: https:\/\/www\.amazon\.it\/dp\/B002KTID3A/);
+  assert.match(message, /🚨 <b>Vine match<\/b> · Recommended for you/);
+  assert.match(message, /Bosch drill bit set/);
+  assert.match(message, /💰 <b>Value<\/b>: \u20ac42\.50/);
+  assert.match(message, /🎯 <b>Score<\/b>: 25 · <b>Signals<\/b>: \+3 \/ -0/);
+  assert.match(message, /🏷️ <b>Brand<\/b>: bosch/);
+  assert.match(message, /🔔 <b>Trigger<\/b>: value \u20ac42\.50 &gt;= \u20ac35\.00/);
+  assert.doesNotMatch(message, /https:\/\/www\.amazon\.it\/vine\/vine-items\?queue=potluck/);
+  assert.doesNotMatch(message, /https:\/\/www\.amazon\.it\/dp\/B002KTID3A/);
+
+  assert.deepEqual(telegram.productReplyMarkup({
+    section_url: "https://www.amazon.it/vine/vine-items?queue=potluck",
+    url: "https://www.amazon.it/dp/B002KTID3A"
+  }), {
+    inline_keyboard: [
+      [
+        {
+          text: "Open Vine section",
+          url: "https://www.amazon.it/vine/vine-items?queue=potluck"
+        }
+      ]
+    ]
+  });
 
   const noValueMessage = telegram.formatProductMessage(
     {
@@ -742,7 +826,7 @@ function testTelegramFormatting() {
     }
   );
 
-  assert.match(noValueMessage, /<b>Value\/price<\/b>: not visible on Vine card/);
+  assert.match(noValueMessage, /💰 <b>Value<\/b>: not shown/);
 
   const sessionMessage = telegram.formatSessionAttentionMessage(
     new Error('Amazon session is not valid or login is required for "Recommended for you".'),
@@ -1005,6 +1089,103 @@ async function testRunCycleParallelProcessesFirstCompletedSection() {
   assert.equal(summary.notified, 1);
 }
 
+async function testRunCycleUsesDetailValueBeforeMinValueTrigger() {
+  const events = [];
+  const saves = [];
+  const sentProducts = [];
+  const config = loadConfig({
+    sections: [
+      { name: "Additional items", url: "https://www.amazon.it/vine/vine-items?queue=encore" }
+    ],
+    notifyAllProducts: false,
+    notifyAllProductsWindow: "",
+    minScoreToNotify: 99,
+    minValueToNotifyEur: 35,
+    strictNotifyMode: true,
+    strictMinPositiveSignals: 2,
+    strictMaxNegativeSignals: 0,
+    maxNotificationsPerCycle: 5,
+    detailValueLookupEnabled: true,
+    detailValueLookupMaxPerCycle: 5,
+    sectionDelayMs: 0
+  });
+  const product = {
+    asin: "B0VALUEONLY",
+    title: "Plain low score product",
+    section: "Additional items",
+    section_url: "https://www.amazon.it/vine/vine-items?queue=encore",
+    estimated_value_eur: null,
+    vine_recommendation_id: "APJ#B0VALUEONLY#vine.enrollment.test",
+    raw_text: ""
+  };
+  const scanner = {
+    async scanSection(section) {
+      events.push(`scan:${section.name}`);
+      return [product];
+    },
+    async enrichProductValue(valueProduct) {
+      events.push(`enrich:${valueProduct.asin}`);
+      return {
+        ...valueProduct,
+        estimated_value_eur: 42.5
+      };
+    }
+  };
+  const storage = {
+    findExisting() {
+      return null;
+    },
+    saveProduct(savedProduct, _scoring, diagnostics = {}) {
+      saves.push({ product: savedProduct, diagnostics });
+      events.push(`save:${diagnostics.decision}:${savedProduct.estimated_value_eur}`);
+      return {
+        isNew: saves.length === 1,
+        product: {
+          ...savedProduct,
+          id: 42,
+          notified: 0
+        }
+      };
+    },
+    markNotified(productId) {
+      events.push(`mark:${productId}`);
+    },
+    markMissingProducts() {
+      events.push("missing:0");
+      return 0;
+    }
+  };
+  const telegram = {
+    async sendProduct(sentProduct) {
+      sentProducts.push(sentProduct);
+      events.push(`notify:${sentProduct.estimated_value_eur}`);
+      return true;
+    }
+  };
+
+  const summary = await runCycle({
+    scanner,
+    storage,
+    telegram,
+    config,
+    logger: silentLogger
+  });
+
+  assert.deepEqual(events, [
+    "scan:Additional items",
+    "enrich:B0VALUEONLY",
+    "save:candidate:42.5",
+    "notify:42.5",
+    "mark:42",
+    "save:notified:42.5",
+    "missing:0"
+  ]);
+  assert.equal(sentProducts[0].estimated_value_eur, 42.5);
+  assert.deepEqual(saves[0].diagnostics.triggers, ["estimated value \u20ac42.50 >= \u20ac35.00"]);
+  assert.equal(summary.notified, 1);
+  assert.equal(summary.detailValueLookupHits, 1);
+}
+
 function testScannerTurboOnlyDuringAdaptiveActive() {
   const config = loadConfig({
     adaptiveScanEnabled: true,
@@ -1139,6 +1320,7 @@ async function main() {
   testRuntimeSettings();
   testExternalScoringRules();
   testScannerFixtures();
+  await testScannerDetailValueLookup();
   testStorageEstimatedValue();
   await testTelegramControlCommands();
   testTelegramFormatting();
@@ -1146,6 +1328,7 @@ async function main() {
   testSessionAttentionDeferral();
   await testRunCycleNotifiesAfterEachSection();
   await testRunCycleParallelProcessesFirstCompletedSection();
+  await testRunCycleUsesDetailValueBeforeMinValueTrigger();
   testScannerTurboOnlyDuringAdaptiveActive();
   await testScannerHardTimeoutClosesStuckPage();
   await testScannerReusesSectionPages();

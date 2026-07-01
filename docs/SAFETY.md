@@ -8,6 +8,7 @@ It is designed to help you notice products in Amazon Vine, not to automate order
 
 - Open configured Amazon Vine section URLs.
 - Read product cards from the page DOM.
+- Read Vine detail metadata for products being evaluated for notification, with per-cycle limits.
 - Store seen product metadata in a local SQLite database.
 - Send Telegram notifications for products matching your scoring rules.
 - Reuse a persistent Chromium profile created by manual login.
@@ -21,7 +22,8 @@ Vine Watcher must not:
 - bypass CAPTCHA, MFA, login, rate limits, or anti-abuse controls
 - store your Amazon password
 - export, import, or manipulate Amazon cookies explicitly
-- perform hidden product-detail scraping to discover values not visible in the Vine card
+- crawl external Amazon product pages to enrich every product
+- perform unbounded Vine detail crawling unrelated to notification decisions
 
 ## Manual Control
 

@@ -139,10 +139,33 @@ function safeConfigSnapshot(config) {
     sectionHardTimeoutMs: config.sectionHardTimeoutMs,
     sectionScanConcurrency: config.sectionScanConcurrency,
     reuseSectionPages: config.reuseSectionPages,
+    detailValueLookupEnabled: config.detailValueLookupEnabled,
+    detailValueLookupMaxPerCycle: config.detailValueLookupMaxPerCycle,
     scannerTurboOnlyDuringAdaptiveActive: config.scannerTurboOnlyDuringAdaptiveActive,
     scoringRulesLoaded: config.scoringRulesLoaded,
     sections: config.sections.map((section) => section.name)
   };
+}
+
+function hasEstimatedValue(product) {
+  if (!product || product.estimated_value_eur === null || product.estimated_value_eur === undefined) {
+    return false;
+  }
+  const parsed = Number(product.estimated_value_eur);
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
+function scoringCanNotify(scoring, config) {
+  if (scoring.score < config.minScoreToNotify) {
+    return false;
+  }
+  if (!config.strictNotifyMode) {
+    return true;
+  }
+  return (
+    scoring.positiveSignals >= config.strictMinPositiveSignals &&
+    scoring.negativeSignals <= config.strictMaxNegativeSignals
+  );
 }
 
 function layoutWarningsForSummary(summary, config, layoutHealthState = null) {
@@ -240,6 +263,9 @@ async function runCycle({
   let skippedNoTrigger = 0;
   let skippedNotificationLimit = 0;
   let telegramFailures = 0;
+  let detailValueLookups = 0;
+  let detailValueLookupHits = 0;
+  let detailValueLookupFailures = 0;
   const sections = [];
 
   if (scanner.config !== scanConfig) {
@@ -271,12 +297,46 @@ async function runCycle({
 
       const preliminaryExisting = storage.findExisting(product);
       const preliminaryNotified = preliminaryExisting && preliminaryExisting.notified === 1;
-      const preliminaryProduct = preliminaryExisting || product;
-      const triggers = notificationTriggers(preliminaryProduct, scoring, config);
-      const blockers = notificationBlockers(preliminaryProduct, scoring, config, preliminaryNotified);
+      let workingProduct = { ...product };
+      if (!hasEstimatedValue(workingProduct) && hasEstimatedValue(preliminaryExisting)) {
+        workingProduct.estimated_value_eur = preliminaryExisting.estimated_value_eur;
+      }
+
+      const detailLookupBudget = Math.max(0, Number(config.detailValueLookupMaxPerCycle || 0));
+      const notifyAllActiveForLookup = isNotifyAllProductsActive(config);
+      const valueLookupCanUnlockNotification = !preliminaryExisting && config.minValueToNotifyEur > 0;
+      const shouldLookupDetailValue =
+        Boolean(config.detailValueLookupEnabled) &&
+        detailValueLookups < detailLookupBudget &&
+        !preliminaryNotified &&
+        !hasEstimatedValue(workingProduct) &&
+        Boolean(workingProduct.vine_recommendation_id) &&
+        typeof scanner.enrichProductValue === "function" &&
+        (valueLookupCanUnlockNotification || notifyAllActiveForLookup || scoringCanNotify(scoring, config));
+
+      if (shouldLookupDetailValue) {
+        detailValueLookups += 1;
+        try {
+          const enrichedProduct = await scanner.enrichProductValue(workingProduct);
+          if (hasEstimatedValue(enrichedProduct)) {
+            workingProduct = enrichedProduct;
+            detailValueLookupHits += 1;
+            logger.info(
+              `Vine detail value found value=${formatEuro(workingProduct.estimated_value_eur)} ` +
+                `section="${workingProduct.section}" title="${workingProduct.title}"`
+            );
+          }
+        } catch (error) {
+          detailValueLookupFailures += 1;
+          logger.warn(`Vine detail value lookup failed for "${workingProduct.title}": ${error.message}`);
+        }
+      }
+
+      const triggers = notificationTriggers(workingProduct, scoring, config);
+      const blockers = notificationBlockers(workingProduct, scoring, config, preliminaryNotified);
       const hasTrigger = triggers.length > 0;
       const preliminaryDecision = preliminaryNotified ? "already_notified" : hasTrigger ? "candidate" : "no_trigger";
-      const saved = storage.saveProduct(product, scoring, {
+      const saved = storage.saveProduct(workingProduct, scoring, {
         inventoryAt,
         triggers,
         blockers,
@@ -286,8 +346,8 @@ async function runCycle({
       if (saved.isNew) {
         newProducts += 1;
         logger.info(
-          `New product score=${scoring.score} value=${formatEuro(product.estimated_value_eur)} ` +
-            `section="${product.section}" title="${product.title}"`
+          `New product score=${scoring.score} value=${formatEuro(workingProduct.estimated_value_eur)} ` +
+            `section="${workingProduct.section}" title="${workingProduct.title}"`
         );
       }
 
@@ -319,7 +379,7 @@ async function runCycle({
         });
         logger.warn(
           `Notification limit reached; not notifying score=${scoring.score} ` +
-            `value=${formatEuro(saved.product.estimated_value_eur)} title="${product.title}"`
+            `value=${formatEuro(saved.product.estimated_value_eur)} title="${workingProduct.title}"`
         );
         continue;
       }
@@ -470,6 +530,9 @@ async function runCycle({
     skippedNoTrigger,
     skippedNotificationLimit,
     telegramFailures,
+    detailValueLookups,
+    detailValueLookupHits,
+    detailValueLookupFailures,
     dryRun,
     outcome,
     reasonNoNotifications,
@@ -480,7 +543,8 @@ async function runCycle({
   logger.info(
     `Cycle complete: scanned=${scanned} new=${newProducts} gone=${disappearedProducts} notified=${notified} max_score=${
       maxScore === null ? "n/d" : maxScore
-    } elapsed=${elapsedSeconds}s outcome=${outcome}`
+    } detail_value=${detailValueLookupHits}/${detailValueLookups} failed=${detailValueLookupFailures} ` +
+      `elapsed=${elapsedSeconds}s outcome=${outcome}`
   );
   if (summary.layoutWarnings.length > 0) {
     logger.warn(`Layout health warning: ${summary.layoutWarnings.join("; ")}`);

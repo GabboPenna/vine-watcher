@@ -149,6 +149,9 @@ PAGE_SETTLE_SECONDS=1
 SECTION_DELAY_SECONDS=1
 SECTION_SCAN_CONCURRENCY=1
 REUSE_SECTION_PAGES=false
+DETAIL_VALUE_LOOKUP_ENABLED=true
+DETAIL_VALUE_LOOKUP_MAX_PER_CYCLE=10
+DETAIL_VALUE_LOOKUP_TIMEOUT_SECONDS=4
 SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE=false
 BROWSER_RESTART_INTERVAL_MINUTES=180
 BROWSER_MEMORY_RECYCLE_MB=0
@@ -198,6 +201,8 @@ PRODUCT_READY_TIMEOUT_SECONDS=2
 `SECTION_SCAN_CONCURRENCY=2` starts `Recommended for you` and `Additional items` together. The watcher processes whichever section finishes first, so a fast `Additional items` result can notify without waiting for `Recommended for you`.
 
 `REUSE_SECTION_PAGES=true` keeps a dedicated Chromium page open for each section and navigates it again on the next cycle instead of creating and closing a new page every time. If a reused page errors, Vine Watcher discards it and creates a fresh one on the next scan.
+
+`DETAIL_VALUE_LOOKUP_ENABLED=true` lets Vine Watcher perform a short read-only Vine detail lookup when a product card does not expose the estimated value. This reads the Vine detail `taxValue` field, stores it as `estimated_value_eur`, and lets `MIN_VALUE_TO_NOTIFY_EUR` work from the same value Amazon shows as `Valore fiscale stimato`. Lookups are limited by `DETAIL_VALUE_LOOKUP_MAX_PER_CYCLE` and `DETAIL_VALUE_LOOKUP_TIMEOUT_SECONDS` so a busy drop does not turn into an unbounded detail crawl.
 
 To keep resource use lower while Vine is quiet, enable turbo scanning only during adaptive active windows:
 
@@ -252,7 +257,7 @@ Set `NOTIFY_ALL_PRODUCTS=true` to notify every unnotified product the watcher se
 
 Set `NOTIFY_ALL_PRODUCTS_WINDOW=09:00-22:30` to enable notify-all only during a local daily time window. The configured `TZ` value is used, defaults to `Europe/Rome`, and the end time is exclusive. Overnight windows such as `22:00-06:00` are supported.
 
-The value override bypasses strict score filtering. If a product has a visible estimated value greater than or equal to `MIN_VALUE_TO_NOTIFY_EUR`, it is notified.
+The value override bypasses strict score filtering. If a product has an estimated Vine value greater than or equal to `MIN_VALUE_TO_NOTIFY_EUR`, it is notified. The value can come from the card when visible, or from the read-only Vine detail `taxValue` lookup when `DETAIL_VALUE_LOOKUP_ENABLED=true`.
 
 ## Scoring Rules
 

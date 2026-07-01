@@ -43,6 +43,11 @@ function sectionHardTimeoutMs(config) {
   return pageTimeoutMs + Math.max(5000, Math.ceil(pageTimeoutMs * 0.5));
 }
 
+function hasUsableEuroValue(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
 async function closePageQuietly(page, timeoutMs = 3000) {
   if (!page || page.isClosed()) {
     return;
@@ -341,8 +346,90 @@ class VineScanner {
       section: section.name,
       section_url: section.url || this.config.amazonVineBaseUrl,
       estimated_value_eur: estimatedValueEur,
+      vine_recommendation_id: normalizeWhitespace(rawProduct.vine_recommendation_id || ""),
+      vine_card_asin: normalizeWhitespace(rawProduct.vine_card_asin || ""),
+      vine_recommendation_type: normalizeWhitespace(rawProduct.vine_recommendation_type || ""),
       raw_text: truncate(rawText, 4000)
     };
+  }
+
+  async enrichProductValue(product) {
+    if (!this.config.detailValueLookupEnabled || !product || hasUsableEuroValue(product.estimated_value_eur)) {
+      return product;
+    }
+
+    const recommendationId = normalizeWhitespace(product.vine_recommendation_id || "");
+    if (!recommendationId || !this.context || !this.context.request) {
+      return product;
+    }
+
+    const timeout = Math.max(1000, Number(this.config.detailValueLookupTimeoutMs) || 4000);
+    const baseUrl = product.section_url || this.config.amazonVineBaseUrl || "https://www.amazon.it/vine/vine-items";
+    let origin = "https://www.amazon.it";
+    try {
+      origin = new URL(baseUrl).origin;
+    } catch (_error) {
+      origin = "https://www.amazon.it";
+    }
+
+    const encodedRecommendationId = encodeURIComponent(recommendationId);
+    const recommendationUrl = `${origin}/vine/api/recommendations/${encodedRecommendationId}`;
+    const recommendation = await this.fetchVineJson(recommendationUrl, timeout);
+    const result = recommendation && recommendation.result ? recommendation.result : {};
+    const directItem = result.item && typeof result.item === "object" ? result.item : null;
+    const itemAsin = this.pickDetailItemAsin(product, result, directItem);
+
+    let item = directItem;
+    if (!item && itemAsin) {
+      const itemUrl = `${recommendationUrl}/item/${encodeURIComponent(itemAsin)}?imageSize=180`;
+      const itemResponse = await this.fetchVineJson(itemUrl, timeout);
+      item = itemResponse && itemResponse.result ? itemResponse.result : null;
+    }
+
+    if (!item) {
+      return product;
+    }
+
+    const taxCurrency = normalizeWhitespace(item.taxCurrency || "EUR").toUpperCase();
+    const taxValue = Number(item.taxValue);
+    if (taxCurrency !== "EUR" || !Number.isFinite(taxValue) || taxValue <= 0) {
+      return product;
+    }
+
+    return {
+      ...product,
+      image_url: product.image_url || canonicalizeUrl(item.imageUrl, baseUrl),
+      estimated_value_eur: taxValue
+    };
+  }
+
+  async fetchVineJson(url, timeout) {
+    const response = await this.context.request.get(url, {
+      timeout
+    });
+    const ok = typeof response.ok === "function" ? response.ok() : response.status() >= 200 && response.status() < 300;
+    if (!ok) {
+      throw new Error(`Vine detail lookup failed: HTTP ${response.status()}`);
+    }
+    return response.json();
+  }
+
+  pickDetailItemAsin(product, recommendationResult, directItem) {
+    if (directItem && directItem.asin) {
+      return normalizeWhitespace(directItem.asin);
+    }
+
+    const variations = Array.isArray(recommendationResult.variations) ? recommendationResult.variations : [];
+    const productAsin = normalizeWhitespace(product.asin || "").toUpperCase();
+    const matchingVariation = variations.find((variation) => {
+      return normalizeWhitespace(variation && variation.asin).toUpperCase() === productAsin;
+    });
+    if (matchingVariation && matchingVariation.asin) {
+      return normalizeWhitespace(matchingVariation.asin);
+    }
+
+    const firstVariation = variations.find((variation) => variation && variation.asin);
+    return firstVariation ? normalizeWhitespace(firstVariation.asin) : productAsin;
   }
 
   async assertSessionReady(page, section) {
@@ -622,11 +709,13 @@ function extractProductsFromPage(args) {
   }
 
   function pickAsin(card, url) {
+    const detailInput = card.querySelector(".vvp-details-btn input[data-asin]");
     const ownAttrs = [
       attr(card, "data-asin"),
       attr(card, "data-itemid"),
       attr(card, "data-recommendation-asin"),
       attr(card, "id"),
+      attr(detailInput, "data-asin"),
       url
     ];
 
@@ -657,6 +746,7 @@ function extractProductsFromPage(args) {
     const url = pickUrl(card);
     const image = pickImage(card);
     const asin = pickAsin(card, url);
+    const detailInput = card.querySelector(".vvp-details-btn input[data-asin]");
 
     if (!title && !asin && !url) {
       continue;
@@ -671,6 +761,9 @@ function extractProductsFromPage(args) {
       image_alt: attr(card.querySelector("img[alt]"), "alt"),
       section: args.sectionName,
       section_url: args.sectionUrl,
+      vine_recommendation_id: attr(detailInput, "data-recommendation-id"),
+      vine_card_asin: attr(detailInput, "data-asin"),
+      vine_recommendation_type: attr(detailInput, "data-recommendation-type"),
       raw_text: rawText
     });
   }

@@ -6,6 +6,17 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.6.0] - 2026-07-01
+
+### Added
+
+- Product notifications now use an inline Telegram button for the Vine section instead of printing the full URL.
+- Estimated value alerts can now use the read-only Vine detail `taxValue` field when the card does not expose a value.
+
+### Changed
+
+- Telegram product notifications now group keywords, brands, bonuses, triggers, score, and value into a shorter product-card layout.
+
 ## [0.5.4] - 2026-07-01
 
 ### Changed

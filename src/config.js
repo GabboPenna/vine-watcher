@@ -840,6 +840,10 @@ function loadConfig(overrides = {}) {
     sectionDelayMs: parseNumber(readEnv("SECTION_DELAY_SECONDS", "1"), 1, 0) * 1000,
     sectionScanConcurrency: parseNumber(readEnv("SECTION_SCAN_CONCURRENCY", "1"), 1, 1),
     reuseSectionPages: parseBool(readEnv("REUSE_SECTION_PAGES", "false"), false),
+    detailValueLookupEnabled: parseBool(readEnv("DETAIL_VALUE_LOOKUP_ENABLED", "true"), true),
+    detailValueLookupMaxPerCycle: parseNumber(readEnv("DETAIL_VALUE_LOOKUP_MAX_PER_CYCLE", "10"), 10, 0),
+    detailValueLookupTimeoutMs:
+      parseNumber(readEnv("DETAIL_VALUE_LOOKUP_TIMEOUT_SECONDS", "4"), 4, 1) * 1000,
     scannerTurboOnlyDuringAdaptiveActive: parseBool(
       readEnv("SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE", "false"),
       false

@@ -21,13 +21,116 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;");
 }
 
-function boldKey(key, value) {
-  return `<b>${escapeHtml(key)}</b>: ${escapeHtml(value)}`;
-}
-
 function compactItems(items, fallback = "none") {
   const values = Array.isArray(items) ? items.filter(Boolean) : [];
   return values.length > 0 ? values.join(" | ") : fallback;
+}
+
+function uniqueLimited(values, limit = 6) {
+  const output = [];
+  const seen = new Set();
+  for (const value of values) {
+    const text = String(value || "").trim();
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push(text);
+    if (output.length >= limit) {
+      break;
+    }
+  }
+  return output;
+}
+
+function humanReasonValue(reason) {
+  return String(reason || "")
+    .replace(/^keyword (?:high|normal):\s*/i, "")
+    .replace(/^negative keyword:\s*/i, "")
+    .replace(/^brand:\s*/i, "")
+    .replace(/^bonus:\s*/i, "")
+    .replace(/^malus:\s*/i, "")
+    .trim();
+}
+
+function reasonLines(reasons) {
+  const groups = {
+    keywords: [],
+    brands: [],
+    bonus: [],
+    watch: [],
+    other: []
+  };
+
+  for (const reason of reasons) {
+    const text = String(reason || "").trim();
+    if (/^keyword (?:high|normal):/i.test(text)) {
+      groups.keywords.push(humanReasonValue(text));
+    } else if (/^brand:/i.test(text)) {
+      groups.brands.push(humanReasonValue(text));
+    } else if (/^bonus:/i.test(text)) {
+      groups.bonus.push(humanReasonValue(text));
+    } else if (/^(negative keyword|malus):/i.test(text)) {
+      groups.watch.push(humanReasonValue(text));
+    } else if (text) {
+      groups.other.push(text);
+    }
+  }
+
+  const lines = [];
+  const keywords = uniqueLimited(groups.keywords, 6);
+  const brands = uniqueLimited(groups.brands, 4);
+  const bonus = uniqueLimited(groups.bonus, 4);
+  const watch = uniqueLimited(groups.watch, 4);
+  const other = uniqueLimited(groups.other, 4);
+
+  if (keywords.length > 0) {
+    lines.push(`✅ <b>Keywords</b>: ${escapeHtml(keywords.join(", "))}`);
+  }
+  if (brands.length > 0) {
+    lines.push(`🏷️ <b>Brand</b>: ${escapeHtml(brands.join(", "))}`);
+  }
+  if (bonus.length > 0) {
+    lines.push(`⭐ <b>Bonus</b>: ${escapeHtml(bonus.join(", "))}`);
+  }
+  if (watch.length > 0) {
+    lines.push(`⚠️ <b>Watch</b>: ${escapeHtml(watch.join(", "))}`);
+  }
+  if (other.length > 0) {
+    lines.push(`ℹ️ <b>Why</b>: ${escapeHtml(other.join(", "))}`);
+  }
+
+  return lines.length > 0 ? lines : ["ℹ️ <b>Why</b>: no specific reason"];
+}
+
+function humanTrigger(trigger) {
+  const text = String(trigger || "").trim();
+  if (/^notify all products mode$/i.test(text)) {
+    return "notify all";
+  }
+
+  const windowMatch = text.match(/^notify all products window\s+(.+)$/i);
+  if (windowMatch) {
+    return `notify all window ${windowMatch[1]}`;
+  }
+
+  const valueMatch = text.match(/^estimated value\s+(.+?)\s+>=\s+(.+)$/i);
+  if (valueMatch) {
+    return `value ${valueMatch[1]} >= ${valueMatch[2]}`;
+  }
+
+  const strictScoreMatch = text.match(/^strict score\s+(\S+)\s+>=\s+(\S+)/i);
+  if (strictScoreMatch) {
+    return `score ${strictScoreMatch[1]} >= ${strictScoreMatch[2]}`;
+  }
+
+  const scoreMatch = text.match(/^score\s+(\S+)\s+>=\s+(\S+)/i);
+  if (scoreMatch) {
+    return `score ${scoreMatch[1]} >= ${scoreMatch[2]}`;
+  }
+
+  return text;
 }
 
 class TelegramClient {
@@ -73,50 +176,67 @@ class TelegramClient {
       scoring.notificationTriggers && scoring.notificationTriggers.length > 0
         ? scoring.notificationTriggers
         : [];
-    const estimatedValue = formatEuro(product.estimated_value_eur) || "not visible on Vine card";
-    const vineUrl = product.section_url || product.url || "";
+    const estimatedValue = formatEuro(product.estimated_value_eur) || "not shown";
     const lines = [
-      "\u{1F6A8} Vine match",
-      boldKey("Title", product.title || "Untitled product"),
-      boldKey("Value/price", estimatedValue),
-      `<b>Score</b>: ${escapeHtml(scoring.score)} | <b>Signals</b>: +${escapeHtml(scoring.positiveSignals || 0)} / -${escapeHtml(scoring.negativeSignals || 0)}`,
-      boldKey("Section", product.section || "n/a"),
-      boldKey("Reasons", compactItems(reasons, "no specific reason"))
+      `🚨 <b>Vine match</b> · ${escapeHtml(product.section || "n/a")}`,
+      escapeHtml(truncate(product.title || "Untitled product", 220)),
+      "",
+      `💰 <b>Value</b>: ${escapeHtml(estimatedValue)}`,
+      `🎯 <b>Score</b>: ${escapeHtml(scoring.score)} · <b>Signals</b>: +${escapeHtml(scoring.positiveSignals || 0)} / -${escapeHtml(scoring.negativeSignals || 0)}`,
+      "",
+      ...reasonLines(reasons)
     ];
 
     if (triggers.length > 0) {
-      lines.push(boldKey("Triggers", compactItems(triggers)));
-    }
-
-    if (vineUrl) {
-      lines.push(boldKey("Open Vine section", vineUrl));
+      lines.push(`🔔 <b>Trigger</b>: ${escapeHtml(compactItems(triggers.map(humanTrigger)))}`);
     }
 
     if (product.asin) {
-      lines.push(boldKey("ASIN", product.asin));
+      lines.push(`🆔 <b>ASIN</b>: ${escapeHtml(product.asin)}`);
     }
 
     return lines.join("\n");
   }
 
   formatProductPhotoCaption(product, scoring) {
-    const estimatedValue = formatEuro(product.estimated_value_eur) || "not visible";
-    const vineUrl = product.section_url || product.url || "";
+    const estimatedValue = formatEuro(product.estimated_value_eur) || "not shown";
     const lines = [
-      "\u{1F6A8} Vine match",
+      `🚨 <b>Vine match</b> · ${escapeHtml(product.section || "n/a")}`,
       escapeHtml(truncate(product.title || "Untitled product", 360)),
-      `<b>Value/price</b>: ${escapeHtml(estimatedValue)} | <b>Score</b>: ${escapeHtml(scoring.score)} | +${escapeHtml(scoring.positiveSignals || 0)}/-${escapeHtml(scoring.negativeSignals || 0)}`
+      "",
+      `💰 <b>Value</b>: ${escapeHtml(estimatedValue)} · 🎯 <b>Score</b>: ${escapeHtml(scoring.score)} · +${escapeHtml(scoring.positiveSignals || 0)}/-${escapeHtml(scoring.negativeSignals || 0)}`
     ];
 
-    if (vineUrl) {
-      lines.push(boldKey("Open Vine section", vineUrl));
+    const triggers =
+      scoring.notificationTriggers && scoring.notificationTriggers.length > 0
+        ? scoring.notificationTriggers.map(humanTrigger)
+        : [];
+    if (triggers.length > 0) {
+      lines.push(`🔔 <b>Trigger</b>: ${escapeHtml(compactItems(triggers))}`);
     }
 
     if (product.asin) {
-      lines.push(boldKey("ASIN", product.asin));
+      lines.push(`🆔 <b>ASIN</b>: ${escapeHtml(product.asin)}`);
     }
 
     return lines.join("\n");
+  }
+
+  productReplyMarkup(product) {
+    const vineUrl = product.section_url || product.url || "";
+    if (!vineUrl) {
+      return null;
+    }
+    return {
+      inline_keyboard: [
+        [
+          {
+            text: "Open Vine section",
+            url: vineUrl
+          }
+        ]
+      ]
+    };
   }
 
   async sendProduct(product, scoring) {
@@ -126,23 +246,32 @@ class TelegramClient {
     }
 
     const message = this.formatProductMessage(product, scoring);
+    const replyMarkup = this.productReplyMarkup(product);
 
     if (product.image_url) {
       try {
         const caption = message.length <= 1024 ? message : this.formatProductPhotoCaption(product, scoring);
-        await this.request("sendPhoto", {
+        const payload = {
           chat_id: this.chatId,
           photo: product.image_url,
           caption: truncate(caption, 1024),
           parse_mode: "HTML"
-        });
+        };
+        if (replyMarkup) {
+          payload.reply_markup = replyMarkup;
+        }
+        await this.request("sendPhoto", payload);
         if (message.length > 1024) {
-          await this.request("sendMessage", {
+          const detailsPayload = {
             chat_id: this.chatId,
             text: truncate(message, 4096),
             disable_web_page_preview: true,
             parse_mode: "HTML"
-          });
+          };
+          if (replyMarkup) {
+            detailsPayload.reply_markup = replyMarkup;
+          }
+          await this.request("sendMessage", detailsPayload);
         }
         return true;
       } catch (error) {
@@ -150,12 +279,16 @@ class TelegramClient {
       }
     }
 
-    await this.request("sendMessage", {
+    const payload = {
       chat_id: this.chatId,
       text: truncate(message, 4096),
       disable_web_page_preview: false,
       parse_mode: "HTML"
-    });
+    };
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
+    await this.request("sendMessage", payload);
     return true;
   }
 
