@@ -1186,6 +1186,103 @@ async function testRunCycleUsesDetailValueBeforeMinValueTrigger() {
   assert.equal(summary.detailValueLookupHits, 1);
 }
 
+async function testRunCycleUpdatesNotificationAfterDetailValueLookup() {
+  const events = [];
+  const config = loadConfig({
+    sections: [
+      { name: "Additional items", url: "https://www.amazon.it/vine/vine-items?queue=encore" }
+    ],
+    notifyAllProducts: true,
+    notifyAllProductsWindow: "",
+    minScoreToNotify: 99,
+    minValueToNotifyEur: 35,
+    maxNotificationsPerCycle: 5,
+    detailValueLookupEnabled: true,
+    detailValueLookupMaxPerCycle: 5,
+    sectionDelayMs: 0
+  });
+  const product = {
+    asin: "B0FASTVALUE",
+    title: "Notify all product",
+    section: "Additional items",
+    section_url: "https://www.amazon.it/vine/vine-items?queue=encore",
+    estimated_value_eur: null,
+    vine_recommendation_id: "APJ#B0FASTVALUE#vine.enrollment.test",
+    raw_text: ""
+  };
+  const scanner = {
+    async scanSection(section) {
+      events.push(`scan:${section.name}`);
+      return [product];
+    },
+    async enrichProductValue(valueProduct) {
+      events.push(`enrich:${valueProduct.asin}`);
+      return {
+        ...valueProduct,
+        estimated_value_eur: 42.5
+      };
+    }
+  };
+  const storage = {
+    findExisting() {
+      return null;
+    },
+    saveProduct(savedProduct, _scoring, diagnostics = {}) {
+      events.push(`save:${diagnostics.decision}:${savedProduct.estimated_value_eur || "none"}`);
+      return {
+        isNew: events.filter((event) => event.startsWith("save:")).length === 1,
+        product: {
+          ...savedProduct,
+          id: 43,
+          notified: 0
+        }
+      };
+    },
+    markNotified(productId) {
+      events.push(`mark:${productId}`);
+    },
+    markMissingProducts() {
+      events.push("missing:0");
+      return 0;
+    }
+  };
+  const telegram = {
+    async sendProduct(sentProduct) {
+      events.push(`notify:${sentProduct.value_lookup_pending ? "pending" : sentProduct.estimated_value_eur || "none"}`);
+      return {
+        kind: "photo",
+        chatId: 123,
+        messageId: 456
+      };
+    },
+    async editProductNotification(_sentMessage, editedProduct) {
+      events.push(`edit:${editedProduct.estimated_value_eur}`);
+      return true;
+    }
+  };
+
+  const summary = await runCycle({
+    scanner,
+    storage,
+    telegram,
+    config,
+    logger: silentLogger
+  });
+
+  assert.deepEqual(events, [
+    "scan:Additional items",
+    "save:candidate:none",
+    "notify:pending",
+    "mark:43",
+    "enrich:B0FASTVALUE",
+    "edit:42.5",
+    "save:notified:42.5",
+    "missing:0"
+  ]);
+  assert.equal(summary.notified, 1);
+  assert.equal(summary.detailValueLookupHits, 1);
+}
+
 function testScannerTurboOnlyDuringAdaptiveActive() {
   const config = loadConfig({
     adaptiveScanEnabled: true,
@@ -1329,6 +1426,7 @@ async function main() {
   await testRunCycleNotifiesAfterEachSection();
   await testRunCycleParallelProcessesFirstCompletedSection();
   await testRunCycleUsesDetailValueBeforeMinValueTrigger();
+  await testRunCycleUpdatesNotificationAfterDetailValueLookup();
   testScannerTurboOnlyDuringAdaptiveActive();
   await testScannerHardTimeoutClosesStuckPage();
   await testScannerReusesSectionPages();

@@ -204,6 +204,8 @@ PRODUCT_READY_TIMEOUT_SECONDS=2
 
 `DETAIL_VALUE_LOOKUP_ENABLED=true` lets Vine Watcher perform a short read-only Vine detail lookup when a product card does not expose the estimated value. This reads the Vine detail `taxValue` field, stores it as `estimated_value_eur`, and lets `MIN_VALUE_TO_NOTIFY_EUR` work from the same value Amazon shows as `Valore fiscale stimato`. Lookups are limited by `DETAIL_VALUE_LOOKUP_MAX_PER_CYCLE` and `DETAIL_VALUE_LOOKUP_TIMEOUT_SECONDS` so a busy drop does not turn into an unbounded detail crawl.
 
+If a product already matches score, strict, or notify-all rules, Vine Watcher sends the Telegram notification immediately. When the value lookup finishes afterward, it edits the same Telegram message or caption with the recovered value. If the product would only be notified because it crosses `MIN_VALUE_TO_NOTIFY_EUR`, the lookup must happen before notification because the value is the trigger.
+
 To keep resource use lower while Vine is quiet, enable turbo scanning only during adaptive active windows:
 
 ```bash

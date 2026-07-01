@@ -176,7 +176,7 @@ class TelegramClient {
       scoring.notificationTriggers && scoring.notificationTriggers.length > 0
         ? scoring.notificationTriggers
         : [];
-    const estimatedValue = formatEuro(product.estimated_value_eur) || "not shown";
+    const estimatedValue = formatEuro(product.estimated_value_eur) || (product.value_lookup_pending ? "checking..." : "not shown");
     const lines = [
       `🚨 <b>Vine match</b> · ${escapeHtml(product.section || "n/a")}`,
       escapeHtml(truncate(product.title || "Untitled product", 220)),
@@ -199,7 +199,7 @@ class TelegramClient {
   }
 
   formatProductPhotoCaption(product, scoring) {
-    const estimatedValue = formatEuro(product.estimated_value_eur) || "not shown";
+    const estimatedValue = formatEuro(product.estimated_value_eur) || (product.value_lookup_pending ? "checking..." : "not shown");
     const lines = [
       `🚨 <b>Vine match</b> · ${escapeHtml(product.section || "n/a")}`,
       escapeHtml(truncate(product.title || "Untitled product", 360)),
@@ -260,7 +260,7 @@ class TelegramClient {
         if (replyMarkup) {
           payload.reply_markup = replyMarkup;
         }
-        await this.request("sendPhoto", payload);
+        const photoResult = await this.request("sendPhoto", payload);
         if (message.length > 1024) {
           const detailsPayload = {
             chat_id: this.chatId,
@@ -273,7 +273,12 @@ class TelegramClient {
           }
           await this.request("sendMessage", detailsPayload);
         }
-        return true;
+        return {
+          sent: true,
+          kind: "photo",
+          chatId: photoResult.chat && photoResult.chat.id,
+          messageId: photoResult.message_id
+        };
       } catch (error) {
         this.logger.warn(`sendPhoto failed, falling back to sendMessage: ${error.message}`);
       }
@@ -288,8 +293,55 @@ class TelegramClient {
     if (replyMarkup) {
       payload.reply_markup = replyMarkup;
     }
-    await this.request("sendMessage", payload);
-    return true;
+    const messageResult = await this.request("sendMessage", payload);
+    return {
+      sent: true,
+      kind: "message",
+      chatId: messageResult.chat && messageResult.chat.id,
+      messageId: messageResult.message_id
+    };
+  }
+
+  async editProductNotification(sentMessage, product, scoring) {
+    if (!this.enabled) {
+      this.logger.warn("Telegram token/chat id missing; product edit skipped");
+      return false;
+    }
+    if (!sentMessage || !sentMessage.messageId) {
+      return false;
+    }
+
+    const chatId = sentMessage.chatId || this.chatId;
+    const replyMarkup = this.productReplyMarkup(product);
+    const message = this.formatProductMessage(product, scoring);
+    const payload = {
+      chat_id: chatId,
+      message_id: sentMessage.messageId,
+      parse_mode: "HTML"
+    };
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
+
+    try {
+      if (sentMessage.kind === "photo") {
+        payload.caption = truncate(
+          message.length <= 1024 ? message : this.formatProductPhotoCaption(product, scoring),
+          1024
+        );
+        await this.request("editMessageCaption", payload);
+      } else {
+        payload.text = truncate(message, 4096);
+        payload.disable_web_page_preview = false;
+        await this.request("editMessageText", payload);
+      }
+      return true;
+    } catch (error) {
+      if (/message is not modified/i.test(error.message)) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   async sendText(text, options = {}) {

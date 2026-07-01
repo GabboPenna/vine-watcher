@@ -282,6 +282,37 @@ async function runCycle({
     );
   }
 
+  async function lookupDetailValue(valueProduct) {
+    const detailLookupBudget = Math.max(0, Number(config.detailValueLookupMaxPerCycle || 0));
+    if (
+      !config.detailValueLookupEnabled ||
+      detailValueLookups >= detailLookupBudget ||
+      hasEstimatedValue(valueProduct) ||
+      !valueProduct.vine_recommendation_id ||
+      typeof scanner.enrichProductValue !== "function"
+    ) {
+      return valueProduct;
+    }
+
+    detailValueLookups += 1;
+    try {
+      const enrichedProduct = await scanner.enrichProductValue(valueProduct);
+      if (hasEstimatedValue(enrichedProduct)) {
+        detailValueLookupHits += 1;
+        logger.info(
+          `Vine detail value found value=${formatEuro(enrichedProduct.estimated_value_eur)} ` +
+            `section="${enrichedProduct.section}" title="${enrichedProduct.title}"`
+        );
+        return enrichedProduct;
+      }
+    } catch (error) {
+      detailValueLookupFailures += 1;
+      logger.warn(`Vine detail value lookup failed for "${valueProduct.title}": ${error.message}`);
+    }
+
+    return valueProduct;
+  }
+
   async function processSectionProducts(section, products) {
     scanned += products.length;
     sections.push({
@@ -302,37 +333,18 @@ async function runCycle({
         workingProduct.estimated_value_eur = preliminaryExisting.estimated_value_eur;
       }
 
-      const detailLookupBudget = Math.max(0, Number(config.detailValueLookupMaxPerCycle || 0));
-      const notifyAllActiveForLookup = isNotifyAllProductsActive(config);
-      const valueLookupCanUnlockNotification = !preliminaryExisting && config.minValueToNotifyEur > 0;
-      const shouldLookupDetailValue =
-        Boolean(config.detailValueLookupEnabled) &&
-        detailValueLookups < detailLookupBudget &&
+      let triggers = notificationTriggers(workingProduct, scoring, config);
+      const valueLookupCanUnlockNotification =
+        !preliminaryExisting &&
         !preliminaryNotified &&
-        !hasEstimatedValue(workingProduct) &&
-        Boolean(workingProduct.vine_recommendation_id) &&
-        typeof scanner.enrichProductValue === "function" &&
-        (valueLookupCanUnlockNotification || notifyAllActiveForLookup || scoringCanNotify(scoring, config));
+        triggers.length === 0 &&
+        config.minValueToNotifyEur > 0;
 
-      if (shouldLookupDetailValue) {
-        detailValueLookups += 1;
-        try {
-          const enrichedProduct = await scanner.enrichProductValue(workingProduct);
-          if (hasEstimatedValue(enrichedProduct)) {
-            workingProduct = enrichedProduct;
-            detailValueLookupHits += 1;
-            logger.info(
-              `Vine detail value found value=${formatEuro(workingProduct.estimated_value_eur)} ` +
-                `section="${workingProduct.section}" title="${workingProduct.title}"`
-            );
-          }
-        } catch (error) {
-          detailValueLookupFailures += 1;
-          logger.warn(`Vine detail value lookup failed for "${workingProduct.title}": ${error.message}`);
-        }
+      if (valueLookupCanUnlockNotification) {
+        workingProduct = await lookupDetailValue(workingProduct);
+        triggers = notificationTriggers(workingProduct, scoring, config);
       }
 
-      const triggers = notificationTriggers(workingProduct, scoring, config);
       const blockers = notificationBlockers(workingProduct, scoring, config, preliminaryNotified);
       const hasTrigger = triggers.length > 0;
       const preliminaryDecision = preliminaryNotified ? "already_notified" : hasTrigger ? "candidate" : "no_trigger";
@@ -385,13 +397,20 @@ async function runCycle({
       }
 
       try {
+        const notificationProduct =
+          !hasEstimatedValue(saved.product) && saved.product.vine_recommendation_id
+            ? { ...saved.product, value_lookup_pending: true }
+            : saved.product;
         const sent = dryRun
           ? true
-          : await telegram.sendProduct(saved.product, {
+          : await telegram.sendProduct(notificationProduct, {
               ...scoring,
               notificationTriggers: triggers
             });
         if (sent) {
+          let finalProduct = saved.product;
+          let finalTriggers = triggers;
+
           if (dryRun) {
             dryRunMatches += 1;
             logger.info(
@@ -405,10 +424,28 @@ async function runCycle({
               `Telegram notification sent for product id=${saved.product.id} score=${scoring.score} ` +
                 `value=${formatEuro(saved.product.estimated_value_eur)} triggers="${triggers.join("; ")}"`
             );
+
+            if (!hasEstimatedValue(saved.product) && saved.product.vine_recommendation_id) {
+              const enrichedProduct = await lookupDetailValue(saved.product);
+              if (hasEstimatedValue(enrichedProduct)) {
+                finalProduct = enrichedProduct;
+                finalTriggers = notificationTriggers(finalProduct, scoring, config);
+                if (typeof telegram.editProductNotification === "function") {
+                  await telegram
+                    .editProductNotification(sent, finalProduct, {
+                      ...scoring,
+                      notificationTriggers: finalTriggers
+                    })
+                    .catch((editError) => {
+                      logger.warn(`Telegram value update failed for product id=${saved.product.id}: ${editError.message}`);
+                    });
+                }
+              }
+            }
           }
-          storage.saveProduct(saved.product, scoring, {
+          storage.saveProduct(finalProduct, scoring, {
             inventoryAt,
-            triggers,
+            triggers: finalTriggers,
             blockers: ["no blockers"],
             configSnapshot,
             decision: dryRun ? "dry_run_would_notify" : "notified"

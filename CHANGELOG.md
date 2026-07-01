@@ -6,6 +6,12 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.6.1] - 2026-07-01
+
+### Changed
+
+- Product notifications that already match score or notify-all rules are now sent immediately and updated afterward if the Vine detail value lookup finds a tax value.
+
 ## [0.6.0] - 2026-07-01
 
 ### Added
