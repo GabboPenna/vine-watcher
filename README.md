@@ -14,7 +14,7 @@ Vine Watcher monitors the Amazon Vine sections already available to your logged-
 - Tracks current inventory state: present, disappeared, and reappeared products.
 - Scores products with keyword, brand, category, and negative-signal rules.
 - Can load extra scoring keywords from JSON or simple YAML files.
-- Sends Telegram notifications with score, reasons, ASIN, image when available, and the Vine section URL.
+- Sends compact Telegram notifications with score, visible value/price, reasons, ASIN, image when available, and the Vine section URL.
 - Can be controlled from Telegram with an optional private command interface.
 - Supports estimated-value alerts when the visible Vine card exposes a value.
 - Stores notification decisions, triggers, blockers, and a safe config snapshot for debugging.
@@ -210,7 +210,7 @@ Published image:
 docker pull gabrielepennacchia/vine-watcher:latest
 ```
 
-Release tags are published from semver Git tags such as `v0.5.2`.
+Release tags are published from semver Git tags such as `v0.5.3`.
 
 ## Project Layout
 

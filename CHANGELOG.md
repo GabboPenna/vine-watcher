@@ -6,6 +6,14 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.5.3] - 2026-07-01
+
+### Changed
+
+- Telegram product notifications now always show the visible Vine value/price field, or say when it is not visible on the Vine card.
+- Product notification text is more compact while keeping score, signals, section, reasons, triggers, Vine section link, and ASIN.
+- Long photo notifications now keep a short caption and send the full compact details as a follow-up message instead of losing detail to Telegram's caption limit.
+
 ## [0.5.2] - 2026-06-25
 
 ### Added

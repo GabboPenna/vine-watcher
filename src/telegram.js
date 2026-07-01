@@ -14,6 +14,11 @@ function formatEuro(value) {
   return `\u20ac${parsed.toFixed(2)}`;
 }
 
+function compactItems(items, fallback = "none") {
+  const values = Array.isArray(items) ? items.filter(Boolean) : [];
+  return values.length > 0 ? values.join(" | ") : fallback;
+}
+
 class TelegramClient {
   constructor(config, logger) {
     this.token = config.telegramBotToken;
@@ -57,36 +62,47 @@ class TelegramClient {
       scoring.notificationTriggers && scoring.notificationTriggers.length > 0
         ? scoring.notificationTriggers
         : [];
-    const estimatedValue = formatEuro(product.estimated_value_eur);
+    const estimatedValue = formatEuro(product.estimated_value_eur) || "not visible on Vine card";
     const vineUrl = product.section_url || product.url || "";
     const lines = [
-      "\u{1F6A8} New interesting Vine product",
-      "",
-      `Score: ${scoring.score}`,
-      `Signals: ${scoring.positiveSignals || 0} positive / ${scoring.negativeSignals || 0} negative`,
+      "\u{1F6A8} Vine match",
+      `Title: ${product.title || "Untitled product"}`,
+      `Value/price: ${estimatedValue}`,
+      `Score: ${scoring.score} | Signals: +${scoring.positiveSignals || 0} / -${scoring.negativeSignals || 0}`,
       `Section: ${product.section || "n/a"}`,
-      "",
-      "Title:",
-      product.title || "Untitled product",
-      "",
-      "Reasons:",
-      ...reasons.map((reason) => `- ${reason}`)
+      `Reasons: ${compactItems(reasons, "no specific reason")}`
     ];
 
-    if (estimatedValue) {
-      lines.splice(4, 0, `Estimated value: ${estimatedValue}`);
-    }
-
     if (triggers.length > 0) {
-      lines.push("", "Notification trigger:", ...triggers.map((trigger) => `- ${trigger}`));
+      lines.push(`Triggers: ${compactItems(triggers)}`);
     }
 
     if (vineUrl) {
-      lines.push("", "Open Vine section:", vineUrl);
+      lines.push(`Open Vine section: ${vineUrl}`);
     }
 
     if (product.asin) {
-      lines.push("", `ASIN: ${product.asin}`);
+      lines.push(`ASIN: ${product.asin}`);
+    }
+
+    return lines.join("\n");
+  }
+
+  formatProductPhotoCaption(product, scoring) {
+    const estimatedValue = formatEuro(product.estimated_value_eur) || "not visible";
+    const vineUrl = product.section_url || product.url || "";
+    const lines = [
+      "\u{1F6A8} Vine match",
+      truncate(product.title || "Untitled product", 360),
+      `Value/price: ${estimatedValue} | Score: ${scoring.score} | +${scoring.positiveSignals || 0}/-${scoring.negativeSignals || 0}`
+    ];
+
+    if (vineUrl) {
+      lines.push(`Open Vine section: ${vineUrl}`);
+    }
+
+    if (product.asin) {
+      lines.push(`ASIN: ${product.asin}`);
     }
 
     return lines.join("\n");
@@ -102,11 +118,19 @@ class TelegramClient {
 
     if (product.image_url) {
       try {
+        const caption = message.length <= 1024 ? message : this.formatProductPhotoCaption(product, scoring);
         await this.request("sendPhoto", {
           chat_id: this.chatId,
           photo: product.image_url,
-          caption: truncate(message, 1024)
+          caption: truncate(caption, 1024)
         });
+        if (message.length > 1024) {
+          await this.request("sendMessage", {
+            chat_id: this.chatId,
+            text: truncate(message, 4096),
+            disable_web_page_preview: true
+          });
+        }
         return true;
       } catch (error) {
         this.logger.warn(`sendPhoto failed, falling back to sendMessage: ${error.message}`);

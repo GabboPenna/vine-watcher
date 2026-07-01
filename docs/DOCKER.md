@@ -43,7 +43,7 @@ docker compose up -d watcher
 To pin a release:
 
 ```bash
-VINE_WATCHER_IMAGE=gabrielepennacchia/vine-watcher:0.5.2 docker compose up -d watcher
+VINE_WATCHER_IMAGE=gabrielepennacchia/vine-watcher:0.5.3 docker compose up -d watcher
 ```
 
 ## Manual Amazon Login
@@ -125,7 +125,7 @@ npm run docker:login:finish
 
 ## Image Publishing
 
-The Docker workflow builds images on pushes and pull requests. It publishes to Docker Hub only when a semver tag such as `v0.5.2` is pushed.
+The Docker workflow builds images on pushes and pull requests. It publishes to Docker Hub only when a semver tag such as `v0.5.3` is pushed.
 
 Required GitHub repository secrets:
 
@@ -138,7 +138,7 @@ Optional repository variable:
 
 Release tags publish:
 
-- `0.5.2`
+- `0.5.3`
 - `0.4`
 - `0`
 - `latest`

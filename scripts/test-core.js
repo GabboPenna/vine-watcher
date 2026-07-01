@@ -717,9 +717,31 @@ function testTelegramFormatting() {
     }
   );
 
-  assert.match(message, /Estimated value: \u20ac42\.50/);
-  assert.match(message, /Open Vine section:\nhttps:\/\/www\.amazon\.it\/vine\/vine-items\?queue=potluck/);
-  assert.doesNotMatch(message, /Open Vine section:\nhttps:\/\/www\.amazon\.it\/dp\/B002KTID3A/);
+  assert.match(message, /Value\/price: \u20ac42\.50/);
+  assert.match(message, /Score: 25 \| Signals: \+3 \/ -0/);
+  assert.match(message, /Reasons: brand: bosch/);
+  assert.match(message, /Triggers: estimated value \u20ac42\.50 >= \u20ac35\.00/);
+  assert.match(message, /Open Vine section: https:\/\/www\.amazon\.it\/vine\/vine-items\?queue=potluck/);
+  assert.doesNotMatch(message, /Open Vine section: https:\/\/www\.amazon\.it\/dp\/B002KTID3A/);
+
+  const noValueMessage = telegram.formatProductMessage(
+    {
+      asin: "B002KTID3A",
+      title: "Bosch drill bit set",
+      section: "Additional items",
+      section_url: "https://www.amazon.it/vine/vine-items?queue=encore",
+      estimated_value_eur: null
+    },
+    {
+      score: 12,
+      positiveSignals: 1,
+      negativeSignals: 0,
+      reasons: [],
+      notificationTriggers: []
+    }
+  );
+
+  assert.match(noValueMessage, /Value\/price: not visible on Vine card/);
 
   const sessionMessage = telegram.formatSessionAttentionMessage(
     new Error('Amazon session is not valid or login is required for "Recommended for you".'),
