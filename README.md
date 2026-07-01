@@ -126,8 +126,10 @@ Useful commands:
 /config                       effective config and runtime overrides
 /dashboard                    quick watcher dashboard
 /latest 10                    latest seen products
+/latest present 10            products still visible on Vine
 /why text                     explain why a saved product was notified or ignored
 /replay text 3                resend already seen products
+/replay present 20            resend products visible right now
 /profile balanced             apply conservative, balanced, drop, or notify-all presets
 /notify_all on|off            notify every product
 /notify_all always            notify every product 24/7 and clear the notify-all window
@@ -147,8 +149,9 @@ When Telegram Control starts it also registers the bot command menu, so Telegram
 Diagnostic commands use the local SQLite history:
 
 - `/why maschera` explains the most recent matching saved product, including score, triggers, blockers, and notification state.
-- `/latest unnotified 10` shows recent stored products by mode: `all`, `notified`, `unnotified`, `ignored`, or `top`.
+- `/latest present 10` shows products that are still visible on Vine. Modes: `all`, `notified`, `unnotified`, `ignored`, `present`, `gone`, `reappeared`, or `top`.
 - `/replay bosch 3` manually resends saved products to Telegram and marks them as notified.
+- `/replay present 20` resends the products currently visible on Vine, useful when notify-all is enabled after products were already saved.
 - `/dashboard` summarizes stored products, recent cycles, and memory guard status.
 
 ## Diagnostics And Health
@@ -214,7 +217,7 @@ Published image:
 docker pull gabrielepennacchia/vine-watcher:latest
 ```
 
-Release tags are published from semver Git tags such as `v0.6.1`.
+Release tags are published from semver Git tags such as `v0.6.2`.
 
 ## Project Layout
 

@@ -477,6 +477,7 @@ async function testTelegramControlCommands() {
       score: 25,
       reasons_json: JSON.stringify(["brand: bosch"]),
       notified: 0,
+      present_now: 1,
       raw_text: "Bosch trapano smart"
     }
   ];
@@ -499,8 +500,16 @@ async function testTelegramControlCommands() {
         .filter((product) => product.title.toLowerCase().includes(normalized))
         .slice(0, limit);
     },
-    recentProducts({ limit } = {}) {
-      return storedProducts.slice(0, limit || 10);
+    recentProducts({ limit, mode = "all" } = {}) {
+      let products = storedProducts;
+      if (mode === "present") {
+        products = products.filter((product) => product.present_now === 1);
+      } else if (mode === "notified") {
+        products = products.filter((product) => product.notified === 1);
+      } else if (mode === "unnotified" || mode === "ignored") {
+        products = products.filter((product) => product.notified !== 1);
+      }
+      return products.slice(0, limit || 10);
     },
     recentScanCycles() {
       return [
@@ -655,11 +664,14 @@ async function testTelegramControlCommands() {
   assert.equal(settings.scan_interval_seconds, "10");
   assert.equal(settings.browser_memory_recycle_mb, "1500");
   assert.match(await control.executeCommand("/latest 1"), /Bosch trapano smart/);
+  assert.match(await control.executeCommand("/latest present 1"), /Bosch trapano smart/);
   assert.match(await control.executeCommand("/dashboard"), /Saved products|Prodotti salvati/);
   assert.match(await control.executeCommand("/why trapano"), /Bosch trapano smart/);
   assert.match(await control.executeCommand("/replay trapano 1"), /1\/1/);
   assert.equal(sentProducts.length, 1);
   assert.equal(storedProducts[0].notified, 1);
+  assert.match(await control.executeCommand("/replay present 20"), /1\/1/);
+  assert.equal(sentProducts.length, 2);
   assert.match(await control.executeCommand("/reset notify_all_window"), /reset/);
   assert.equal(settings.notify_all_products_window, undefined);
   assert.match(await control.executeCommand("/reset min_score_to_notify"), /reset/);

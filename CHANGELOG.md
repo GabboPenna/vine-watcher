@@ -6,6 +6,13 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.6.2] - 2026-07-01
+
+### Added
+
+- Added `present`, `gone`, and `reappeared` product modes to Telegram `/latest` and `/replay`.
+- Added `/replay present 20` as a quick way to resend products currently visible on Vine when they were already marked as notified in the local database.
+
 ## [0.6.1] - 2026-07-01
 
 ### Changed

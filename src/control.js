@@ -171,6 +171,8 @@ const CALLBACK_COMMANDS = {
   "vw:lang:en": "/lang en"
 };
 
+const PRODUCT_LIST_MODES = new Set(["all", "notified", "unnotified", "ignored", "present", "gone", "reappeared", "top"]);
+
 function normalizeCommandName(value) {
   return String(value || "").split("@")[0].trim().toLowerCase();
 }
@@ -441,8 +443,10 @@ function helpMessage(language) {
       "/config - mostra la configurazione efficace",
       "/dashboard - riepilogo veloce di cicli e prodotti",
       "/latest 10 - ultimi prodotti visti",
+      "/latest present 10 - prodotti ancora visibili su Vine",
       "/why testo - capiamo perche un prodotto e stato notificato o ignorato",
       "/replay testo 3 - reinvia prodotti gia visti",
+      "/replay present 20 - reinvia i prodotti visibili adesso",
       "/profile balanced|conservative|drop|notify-all - profilo operativo",
       "/help - mostra questa guida",
       "/lang it|en - cambia lingua",
@@ -489,8 +493,10 @@ function helpMessage(language) {
     "/config - show the effective configuration",
     "/dashboard - quick summary of cycles and products",
     "/latest 10 - latest seen products",
+    "/latest present 10 - products still visible on Vine",
     "/why text - explain why a product was notified or ignored",
     "/replay text 3 - resend already seen products",
+    "/replay present 20 - resend products visible right now",
     "/profile balanced|conservative|drop|notify-all - operating profile",
     "/help - show this guide",
     "/lang it|en - change language",
@@ -1173,10 +1179,9 @@ class TelegramControl {
   }
 
   commandLatest(args, language) {
-    const modes = new Set(["all", "notified", "unnotified", "ignored", "top"]);
     const first = String(args[0] || "").trim().toLowerCase();
-    const mode = modes.has(first) ? first : "all";
-    const limitArg = modes.has(first) ? args[1] : args[0];
+    const mode = PRODUCT_LIST_MODES.has(first) ? first : "all";
+    const limitArg = PRODUCT_LIST_MODES.has(first) ? args[1] : args[0];
     return this.formatLatest(language, mode, parseLimit(limitArg, 10, 20));
   }
 
@@ -1202,24 +1207,23 @@ class TelegramControl {
   }
 
   async commandReplay(args, language) {
-    const modes = new Set(["all", "notified", "unnotified", "ignored", "top"]);
     const lastArg = args[args.length - 1];
     const hasLimit = Number.isInteger(Number(lastArg)) && Number(lastArg) > 0;
-    const limit = parseLimit(hasLimit ? lastArg : "3", 3, 10);
+    const limit = parseLimit(hasLimit ? lastArg : "3", 3, 20);
     const words = hasLimit ? args.slice(0, -1) : args;
     const first = String(words[0] || "").trim().toLowerCase();
     let products = [];
     let label = "";
 
-    if (modes.has(first)) {
+    if (PRODUCT_LIST_MODES.has(first)) {
       products = this.storage.recentProducts ? this.storage.recentProducts({ mode: first, limit }) : [];
       label = first;
     } else {
       const query = words.join(" ").trim();
       if (!query) {
         return language === "it"
-          ? "📣 Uso: /replay testo 3 oppure /replay unnotified 5"
-          : "📣 Usage: /replay text 3 or /replay unnotified 5";
+          ? "📣 Uso: /replay testo 3, /replay unnotified 5 oppure /replay present 20"
+          : "📣 Usage: /replay text 3, /replay unnotified 5, or /replay present 20";
       }
       products = this.storage.searchProducts ? this.storage.searchProducts(query, limit) : [];
       label = query;

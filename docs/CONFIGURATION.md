@@ -60,8 +60,10 @@ Commands:
 /dashboard
 /latest 10
 /latest unnotified 10
+/latest present 10
 /why search text
 /replay search text 3
+/replay present 20
 /profile conservative
 /profile balanced
 /profile drop
@@ -104,6 +106,8 @@ Profiles are runtime presets:
 - `notify-all`: notify every newly seen product 24/7 and clear the notify-all window.
 
 Diagnostics are based on the local SQLite database. `/why` explains saved products; `/replay` resends saved products intentionally; `/dashboard` shows recent scan-cycle summaries.
+
+`/latest` and `/replay` support these product modes: `all`, `notified`, `unnotified`, `ignored`, `present`, `gone`, `reappeared`, and `top`. Use `/replay present 20` when products are visible on Vine but were already marked as notified in the local database before notify-all was enabled.
 
 ## Vine Sections
 
