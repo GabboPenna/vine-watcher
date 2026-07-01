@@ -6,6 +6,12 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.5.4] - 2026-07-01
+
+### Changed
+
+- Telegram product notifications now render field labels in bold for better readability.
+
 ## [0.5.3] - 2026-07-01
 
 ### Changed

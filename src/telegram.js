@@ -14,6 +14,17 @@ function formatEuro(value) {
   return `\u20ac${parsed.toFixed(2)}`;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function boldKey(key, value) {
+  return `<b>${escapeHtml(key)}</b>: ${escapeHtml(value)}`;
+}
+
 function compactItems(items, fallback = "none") {
   const values = Array.isArray(items) ? items.filter(Boolean) : [];
   return values.length > 0 ? values.join(" | ") : fallback;
@@ -66,23 +77,23 @@ class TelegramClient {
     const vineUrl = product.section_url || product.url || "";
     const lines = [
       "\u{1F6A8} Vine match",
-      `Title: ${product.title || "Untitled product"}`,
-      `Value/price: ${estimatedValue}`,
-      `Score: ${scoring.score} | Signals: +${scoring.positiveSignals || 0} / -${scoring.negativeSignals || 0}`,
-      `Section: ${product.section || "n/a"}`,
-      `Reasons: ${compactItems(reasons, "no specific reason")}`
+      boldKey("Title", product.title || "Untitled product"),
+      boldKey("Value/price", estimatedValue),
+      `<b>Score</b>: ${escapeHtml(scoring.score)} | <b>Signals</b>: +${escapeHtml(scoring.positiveSignals || 0)} / -${escapeHtml(scoring.negativeSignals || 0)}`,
+      boldKey("Section", product.section || "n/a"),
+      boldKey("Reasons", compactItems(reasons, "no specific reason"))
     ];
 
     if (triggers.length > 0) {
-      lines.push(`Triggers: ${compactItems(triggers)}`);
+      lines.push(boldKey("Triggers", compactItems(triggers)));
     }
 
     if (vineUrl) {
-      lines.push(`Open Vine section: ${vineUrl}`);
+      lines.push(boldKey("Open Vine section", vineUrl));
     }
 
     if (product.asin) {
-      lines.push(`ASIN: ${product.asin}`);
+      lines.push(boldKey("ASIN", product.asin));
     }
 
     return lines.join("\n");
@@ -93,16 +104,16 @@ class TelegramClient {
     const vineUrl = product.section_url || product.url || "";
     const lines = [
       "\u{1F6A8} Vine match",
-      truncate(product.title || "Untitled product", 360),
-      `Value/price: ${estimatedValue} | Score: ${scoring.score} | +${scoring.positiveSignals || 0}/-${scoring.negativeSignals || 0}`
+      escapeHtml(truncate(product.title || "Untitled product", 360)),
+      `<b>Value/price</b>: ${escapeHtml(estimatedValue)} | <b>Score</b>: ${escapeHtml(scoring.score)} | +${escapeHtml(scoring.positiveSignals || 0)}/-${escapeHtml(scoring.negativeSignals || 0)}`
     ];
 
     if (vineUrl) {
-      lines.push(`Open Vine section: ${vineUrl}`);
+      lines.push(boldKey("Open Vine section", vineUrl));
     }
 
     if (product.asin) {
-      lines.push(`ASIN: ${product.asin}`);
+      lines.push(boldKey("ASIN", product.asin));
     }
 
     return lines.join("\n");
@@ -122,13 +133,15 @@ class TelegramClient {
         await this.request("sendPhoto", {
           chat_id: this.chatId,
           photo: product.image_url,
-          caption: truncate(caption, 1024)
+          caption: truncate(caption, 1024),
+          parse_mode: "HTML"
         });
         if (message.length > 1024) {
           await this.request("sendMessage", {
             chat_id: this.chatId,
             text: truncate(message, 4096),
-            disable_web_page_preview: true
+            disable_web_page_preview: true,
+            parse_mode: "HTML"
           });
         }
         return true;
@@ -140,7 +153,8 @@ class TelegramClient {
     await this.request("sendMessage", {
       chat_id: this.chatId,
       text: truncate(message, 4096),
-      disable_web_page_preview: false
+      disable_web_page_preview: false,
+      parse_mode: "HTML"
     });
     return true;
   }
@@ -159,6 +173,10 @@ class TelegramClient {
 
     if (options.reply_markup) {
       payload.reply_markup = options.reply_markup;
+    }
+
+    if (options.parse_mode) {
+      payload.parse_mode = options.parse_mode;
     }
 
     await this.request("sendMessage", payload);
@@ -180,6 +198,10 @@ class TelegramClient {
 
     if (options.reply_markup) {
       payload.reply_markup = options.reply_markup;
+    }
+
+    if (options.parse_mode) {
+      payload.parse_mode = options.parse_mode;
     }
 
     await this.request("editMessageText", payload);

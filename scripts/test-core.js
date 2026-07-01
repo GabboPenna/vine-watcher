@@ -717,12 +717,13 @@ function testTelegramFormatting() {
     }
   );
 
-  assert.match(message, /Value\/price: \u20ac42\.50/);
-  assert.match(message, /Score: 25 \| Signals: \+3 \/ -0/);
-  assert.match(message, /Reasons: brand: bosch/);
-  assert.match(message, /Triggers: estimated value \u20ac42\.50 >= \u20ac35\.00/);
-  assert.match(message, /Open Vine section: https:\/\/www\.amazon\.it\/vine\/vine-items\?queue=potluck/);
-  assert.doesNotMatch(message, /Open Vine section: https:\/\/www\.amazon\.it\/dp\/B002KTID3A/);
+  assert.match(message, /<b>Title<\/b>: Bosch drill bit set/);
+  assert.match(message, /<b>Value\/price<\/b>: \u20ac42\.50/);
+  assert.match(message, /<b>Score<\/b>: 25 \| <b>Signals<\/b>: \+3 \/ -0/);
+  assert.match(message, /<b>Reasons<\/b>: brand: bosch/);
+  assert.match(message, /<b>Triggers<\/b>: estimated value \u20ac42\.50 &gt;= \u20ac35\.00/);
+  assert.match(message, /<b>Open Vine section<\/b>: https:\/\/www\.amazon\.it\/vine\/vine-items\?queue=potluck/);
+  assert.doesNotMatch(message, /<b>Open Vine section<\/b>: https:\/\/www\.amazon\.it\/dp\/B002KTID3A/);
 
   const noValueMessage = telegram.formatProductMessage(
     {
@@ -741,7 +742,7 @@ function testTelegramFormatting() {
     }
   );
 
-  assert.match(noValueMessage, /Value\/price: not visible on Vine card/);
+  assert.match(noValueMessage, /<b>Value\/price<\/b>: not visible on Vine card/);
 
   const sessionMessage = telegram.formatSessionAttentionMessage(
     new Error('Amazon session is not valid or login is required for "Recommended for you".'),
