@@ -56,6 +56,8 @@ Look for long navigation timeouts:
 journalctl -u vine-watcher.service --since "10 minutes ago" --no-pager
 ```
 
+Occasional `page.goto: Timeout ...` or `net::ERR_FAILED` errors on a single Vine queue are usually transient Amazon/network hiccups. Vine Watcher keeps scanning the other configured sections and records the cycle as partial. If every section fails, or Amazon asks for login/CAPTCHA, it is still treated as a real attention condition.
+
 For a temporary aggressive window:
 
 ```bash

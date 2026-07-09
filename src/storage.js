@@ -368,19 +368,34 @@ class ProductStorage {
     this.markNotifiedStatement.run(nowIso(), productId);
   }
 
-  markMissingProducts(inventoryAt) {
+  markMissingProducts(inventoryAt, sectionNames = null) {
     if (!inventoryAt) {
       return 0;
     }
+
+    const sections = Array.isArray(sectionNames)
+      ? sectionNames.map((section) => String(section || "").trim()).filter(Boolean)
+      : [];
+    const sectionFilter =
+      sections.length > 0 ? `AND section IN (${sections.map((_, index) => `@section${index}`).join(", ")})` : "";
+    const params = {
+      disappeared_at: nowIso(),
+      inventory_at: inventoryAt
+    };
+    sections.forEach((section, index) => {
+      params[`section${index}`] = section;
+    });
+
     const info = this.db
       .prepare(
         `UPDATE products
          SET present_now = 0,
-             disappeared_at = COALESCE(disappeared_at, ?)
+             disappeared_at = COALESCE(disappeared_at, @disappeared_at)
          WHERE present_now = 1
-           AND COALESCE(last_inventory_at, '') != ?`
+           AND COALESCE(last_inventory_at, '') != @inventory_at
+           ${sectionFilter}`
       )
-      .run(nowIso(), inventoryAt);
+      .run(params);
     return info.changes || 0;
   }
 

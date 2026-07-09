@@ -423,6 +423,28 @@ function testStorageEstimatedValue() {
   assert.equal(reappeared.present_now, 1);
   assert.equal(reappeared.reappeared_count, 1);
 
+  storage.saveProduct(
+    {
+      asin: "B0ADDITIONAL",
+      title: "Additional item",
+      normalized_title: "additional item",
+      url: "https://www.amazon.it/dp/B0ADDITIONAL",
+      section_url: "https://www.amazon.it/vine/vine-items?queue=encore",
+      section: "Additional items",
+      image_url: "",
+      estimated_value_eur: null,
+      raw_text: ""
+    },
+    { score: 0, reasons: [] },
+    {
+      inventoryAt: "2026-06-20T10:03:00.000Z",
+      decision: "candidate"
+    }
+  );
+  assert.equal(storage.markMissingProducts("2026-06-20T10:04:00.000Z", ["Additional items"]), 1);
+  assert.equal(storage.searchProducts("additional", 1)[0].present_now, 0);
+  assert.equal(storage.searchProducts("bosch", 1)[0].present_now, 1);
+
   storage.setSetting("min_score_to_notify", "5");
   assert.equal(storage.getSetting("min_score_to_notify"), "5");
   assert.deepEqual(storage.getSettings().min_score_to_notify, "5");
@@ -445,7 +467,7 @@ function testStorageEstimatedValue() {
   assert.equal(storage.recentScanCycles(1)[0].outcome, "sent_notifications");
   assert.equal(JSON.parse(storage.recentScanCycles(1)[0].layout_warnings_json)[0], "fixture warning");
   assert.equal(storage.searchProducts("bosch", 1)[0].asin, product.asin);
-  assert.equal(storage.recentProducts({ mode: "all", limit: 1 })[0].asin, product.asin);
+  assert.ok(storage.recentProducts({ mode: "all", limit: 2 }).some((row) => row.asin === product.asin));
   const cleanup = storage.cleanup({ productDays: 1, scanCycleDays: 1, vacuum: false });
   assert.equal(cleanup.vacuumed, false);
 
@@ -1101,6 +1123,90 @@ async function testRunCycleParallelProcessesFirstCompletedSection() {
   assert.equal(summary.notified, 1);
 }
 
+async function testRunCycleContinuesAfterSectionFailure() {
+  const events = [];
+  const config = loadConfig({
+    sections: [
+      { name: "Recommended for you", url: "https://www.amazon.it/vine/vine-items?queue=potluck" },
+      { name: "Additional items", url: "https://www.amazon.it/vine/vine-items?queue=encore" }
+    ],
+    notifyAllProducts: true,
+    maxNotificationsPerCycle: 5,
+    sectionDelayMs: 0
+  });
+  const product = {
+    id: 3,
+    asin: "B0PARTIAL",
+    title: "Partial cycle product",
+    section: "Additional items",
+    section_url: "https://www.amazon.it/vine/vine-items?queue=encore",
+    estimated_value_eur: null
+  };
+  const scanner = {
+    async scanSection(section) {
+      events.push(`scan:${section.name}`);
+      if (section.name === "Recommended for you") {
+        throw new Error("page.goto: Timeout 20000ms exceeded");
+      }
+      return [product];
+    }
+  };
+  const storage = {
+    findExisting() {
+      return null;
+    },
+    saveProduct(savedProduct) {
+      events.push(`save:${savedProduct.title}`);
+      return {
+        isNew: true,
+        product: {
+          ...savedProduct,
+          id: 3,
+          notified: 0
+        }
+      };
+    },
+    markNotified(productId) {
+      events.push(`mark:${productId}`);
+    },
+    markMissingProducts(_inventoryAt, sectionNames) {
+      events.push(`missing:${(sectionNames || []).join("|")}`);
+      return 0;
+    }
+  };
+  const telegram = {
+    async sendProduct(sentProduct) {
+      events.push(`notify:${sentProduct.id}`);
+      return true;
+    }
+  };
+
+  const summary = await runCycle({
+    scanner,
+    storage,
+    telegram,
+    config,
+    logger: silentLogger
+  });
+
+  assert.deepEqual(events, [
+    "scan:Recommended for you",
+    "scan:Additional items",
+    "save:Partial cycle product",
+    "notify:3",
+    "mark:3",
+    "save:Partial cycle product",
+    "missing:Additional items"
+  ]);
+  assert.equal(summary.scanned, 1);
+  assert.equal(summary.newProducts, 1);
+  assert.equal(summary.notified, 1);
+  assert.equal(summary.outcome, "sent_notifications");
+  assert.equal(summary.sectionFailures.length, 1);
+  assert.equal(summary.sectionFailures[0].section, "Recommended for you");
+  assert.match(summary.layoutWarnings.join("\n"), /section failure/);
+}
+
 async function testRunCycleUsesDetailValueBeforeMinValueTrigger() {
   const events = [];
   const saves = [];
@@ -1437,6 +1543,7 @@ async function main() {
   testSessionAttentionDeferral();
   await testRunCycleNotifiesAfterEachSection();
   await testRunCycleParallelProcessesFirstCompletedSection();
+  await testRunCycleContinuesAfterSectionFailure();
   await testRunCycleUsesDetailValueBeforeMinValueTrigger();
   await testRunCycleUpdatesNotificationAfterDetailValueLookup();
   testScannerTurboOnlyDuringAdaptiveActive();

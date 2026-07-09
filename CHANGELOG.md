@@ -6,6 +6,13 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.6.3] - 2026-07-09
+
+### Changed
+
+- Transient failures in one Vine section, such as Amazon navigation timeouts or `net::ERR_FAILED`, no longer abort the whole scan cycle when another configured section can still be scanned.
+- Partial scan cycles now mark products missing only for sections that were scanned successfully, avoiding false disappear/reappear movement after a single section timeout.
+
 ## [0.6.2] - 2026-07-01
 
 ### Added

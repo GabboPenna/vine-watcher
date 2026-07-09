@@ -170,6 +170,14 @@ function scoringCanNotify(scoring, config) {
 
 function layoutWarningsForSummary(summary, config, layoutHealthState = null) {
   const warnings = [];
+  if (summary.sectionFailures && summary.sectionFailures.length > 0) {
+    warnings.push(
+      `section failure(s): ${summary.sectionFailures
+        .map((failure) => `${failure.section}: ${failure.error}`)
+        .join("; ")}`
+    );
+  }
+
   if (summary.scanned <= config.layoutHealthMinProducts) {
     warnings.push(
       `scanned ${summary.scanned} product(s), threshold=${config.layoutHealthMinProducts}; check Amazon layout/session`
@@ -267,6 +275,8 @@ async function runCycle({
   let detailValueLookupHits = 0;
   let detailValueLookupFailures = 0;
   const sections = [];
+  const successfulSectionNames = [];
+  const sectionFailures = [];
 
   if (scanner.config !== scanConfig) {
     scanner.config = scanConfig;
@@ -319,6 +329,7 @@ async function runCycle({
       name: section.name,
       scanned: products.length
     });
+    successfulSectionNames.push(section.name);
 
     for (const product of products) {
       const scoring = scoreProduct(product, config.keywords);
@@ -474,11 +485,35 @@ async function runCycle({
     };
   }
 
+  function recordSectionFailure(section, error) {
+    sectionFailures.push({
+      section,
+      error
+    });
+    sections.push({
+      name: section.name,
+      scanned: 0,
+      error: error && error.message ? error.message : String(error)
+    });
+    logger.warn(
+      `Section "${section.name}" failed this cycle and will be skipped: ${
+        error && error.message ? error.message : String(error)
+      }`
+    );
+  }
+
   const sectionScanConcurrency = Math.max(1, Math.floor(Number(scanConfig.sectionScanConcurrency || 1)));
   if (sectionScanConcurrency <= 1 || scanConfig.sections.length <= 1) {
     for (const section of scanConfig.sections) {
-      const result = await scanSection(section);
-      await processSectionProducts(result.section, result.products);
+      try {
+        const result = await scanSection(section);
+        await processSectionProducts(result.section, result.products);
+      } catch (error) {
+        if (error instanceof SessionNeedsAttentionError) {
+          throw error;
+        }
+        recordSectionFailure(section, error);
+      }
       if (scanConfig.sectionDelayMs > 0) {
         await sleep(scanConfig.sectionDelayMs);
       }
@@ -516,9 +551,13 @@ async function runCycle({
       const settled = await Promise.race(active);
       active.delete(settled.promise);
       if (settled.error) {
-        throw settled.error;
+        if (settled.error instanceof SessionNeedsAttentionError) {
+          throw settled.error;
+        }
+        recordSectionFailure(settled.section, settled.error);
+      } else {
+        await processSectionProducts(settled.result.section, settled.result.products);
       }
-      await processSectionProducts(settled.result.section, settled.result.products);
       if (scanConfig.sectionDelayMs > 0 && queue.length > 0) {
         await sleep(scanConfig.sectionDelayMs);
       }
@@ -526,7 +565,12 @@ async function runCycle({
     }
   }
 
-  disappearedProducts = storage.markMissingProducts(inventoryAt);
+  if (sectionFailures.length > 0 && successfulSectionNames.length === 0) {
+    throw sectionFailures[0].error;
+  }
+
+  const missingSectionFilter = sectionFailures.length > 0 ? successfulSectionNames : null;
+  disappearedProducts = storage.markMissingProducts(inventoryAt, missingSectionFilter);
   const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
   let outcome = "no_notifications";
   let reasonNoNotifications = "";
@@ -545,6 +589,9 @@ async function runCycle({
   } else if (telegramFailures > 0) {
     outcome = "telegram_failures";
     reasonNoNotifications = "telegram failures";
+  } else if (sectionFailures.length > 0) {
+    outcome = "partial_scan";
+    reasonNoNotifications = "one or more sections failed but the cycle continued";
   } else if (newProducts === 0) {
     outcome = "all_seen";
     reasonNoNotifications = "all scanned products were already known";
@@ -570,6 +617,10 @@ async function runCycle({
     detailValueLookups,
     detailValueLookupHits,
     detailValueLookupFailures,
+    sectionFailures: sectionFailures.map((failure) => ({
+      section: failure.section.name,
+      error: failure.error && failure.error.message ? failure.error.message : String(failure.error)
+    })),
     dryRun,
     outcome,
     reasonNoNotifications,
