@@ -312,6 +312,8 @@ The supported keys are the same keyword arrays used by the scorer, such as `posi
 ```bash
 NOTIFY_CRITICAL_ERRORS=true
 CRITICAL_NOTIFICATION_COOLDOWN_SECONDS=900
+TRANSIENT_SCAN_MAX_FAILURES=3
+TRANSIENT_SCAN_BACKOFF_SECONDS=60
 SESSION_ATTENTION_MAX_FAILURES=2
 SESSION_ATTENTION_COOLDOWN_SECONDS=300
 VERIFY_SESSION_ATTENTION=true
@@ -325,6 +327,7 @@ Behavior:
 - suspected login failures are confirmed with a second Vine health check
 - recent successful scans create a grace window
 - transient login redirects back off instead of immediately failing
+- transient navigation failures such as `page.goto` timeouts or `net::ERR_FAILED` back off and notify Telegram only after `TRANSIENT_SCAN_MAX_FAILURES` consecutive failed cycles
 - CAPTCHA and real manual verification still require user action
 
 On personal instances where false login redirects are frequent, set:

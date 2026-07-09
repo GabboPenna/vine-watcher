@@ -217,7 +217,7 @@ Published image:
 docker pull gabrielepennacchia/vine-watcher:latest
 ```
 
-Release tags are published from semver Git tags such as `v0.6.3`.
+Release tags are published from semver Git tags such as `v0.6.4`.
 
 ## Project Layout
 

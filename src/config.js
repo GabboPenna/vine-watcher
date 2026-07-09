@@ -862,6 +862,9 @@ function loadConfig(overrides = {}) {
     notifyCriticalErrors: parseBool(readEnv("NOTIFY_CRITICAL_ERRORS", "true"), true),
     criticalNotificationCooldownMs:
       parseNumber(readEnv("CRITICAL_NOTIFICATION_COOLDOWN_SECONDS", "900"), 900, 60) * 1000,
+    transientScanMaxFailures: parseNumber(readEnv("TRANSIENT_SCAN_MAX_FAILURES", "3"), 3, 1),
+    transientScanBackoffMs:
+      parseNumber(readEnv("TRANSIENT_SCAN_BACKOFF_SECONDS", "60"), 60, 10) * 1000,
     sessionAttentionMaxFailures: parseNumber(readEnv("SESSION_ATTENTION_MAX_FAILURES", "2"), 2, 1),
     sessionAttentionCooldownMs:
       parseNumber(readEnv("SESSION_ATTENTION_COOLDOWN_SECONDS", "300"), 300, 60) * 1000,

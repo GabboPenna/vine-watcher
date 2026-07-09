@@ -6,6 +6,16 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.6.4] - 2026-07-09
+
+### Added
+
+- Added `TRANSIENT_SCAN_MAX_FAILURES` and `TRANSIENT_SCAN_BACKOFF_SECONDS` to suppress Telegram critical alerts for short-lived Amazon navigation failures.
+
+### Changed
+
+- Full-cycle transient navigation failures such as `page.goto` timeouts and `net::ERR_FAILED` now back off and retry before sending a Telegram critical alert.
+
 ## [0.6.3] - 2026-07-09
 
 ### Changed

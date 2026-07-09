@@ -122,6 +122,16 @@ function shouldDeferSessionAttention(error, config, lastKnownGoodSessionAt, now 
   return now - lastKnownGoodSessionAt < config.sessionAttentionGraceMs;
 }
 
+function isTransientScanError(error) {
+  const message = error && error.message ? error.message : String(error || "");
+  return (
+    /page\.goto:.*Timeout/i.test(message) ||
+    /TimeoutError:.*page\.goto/i.test(message) ||
+    /net::ERR_/i.test(message) ||
+    /exceeded hard timeout/i.test(message)
+  );
+}
+
 function safeConfigSnapshot(config) {
   return {
     scanIntervalSeconds: config.scanIntervalSeconds,
@@ -137,6 +147,7 @@ function safeConfigSnapshot(config) {
     strictMaxNegativeSignals: config.strictMaxNegativeSignals,
     maxNotificationsPerCycle: config.maxNotificationsPerCycle,
     sectionHardTimeoutMs: config.sectionHardTimeoutMs,
+    transientScanMaxFailures: config.transientScanMaxFailures,
     sectionScanConcurrency: config.sectionScanConcurrency,
     reuseSectionPages: config.reuseSectionPages,
     detailValueLookupEnabled: config.detailValueLookupEnabled,
@@ -661,6 +672,7 @@ async function main() {
   let lastCriticalNotificationAt = 0;
   let lastSessionAttentionNotificationAt = 0;
   let consecutiveSessionAttentionFailures = 0;
+  let consecutiveTransientScanFailures = 0;
   let lastKnownGoodSessionAt = Date.now();
   let nextDelayOverrideMs = 0;
   let nextDelayReason = "";
@@ -836,6 +848,7 @@ async function main() {
       }
       updateAdaptiveState(adaptiveState, runtimeStatus.lastCycle, effectiveConfig);
       consecutiveSessionAttentionFailures = 0;
+      consecutiveTransientScanFailures = 0;
       lastKnownGoodSessionAt = Date.now();
     } catch (error) {
       if (error instanceof SessionNeedsAttentionError) {
@@ -926,6 +939,36 @@ async function main() {
         }
       } else if (shuttingDown && isBrowserClosedError(error)) {
         logger.info("Scan interrupted by shutdown");
+      } else if (isTransientScanError(error)) {
+        consecutiveTransientScanFailures += 1;
+        nextDelayOverrideMs = Math.max(nextDelayOverrideMs, effectiveConfig.transientScanBackoffMs);
+        nextDelayReason = "transient scan backoff";
+
+        const maxFailures = effectiveConfig.transientScanMaxFailures;
+        const shouldNotify =
+          consecutiveTransientScanFailures >= maxFailures &&
+          effectiveConfig.notifyCriticalErrors &&
+          Date.now() - lastCriticalNotificationAt > effectiveConfig.criticalNotificationCooldownMs;
+
+        logger.warn(
+          `Transient scan failure ${consecutiveTransientScanFailures}/${maxFailures}: ${error.message}; ` +
+            `backing off for ${Math.round(effectiveConfig.transientScanBackoffMs / 1000)}s`
+        );
+
+        if (shouldNotify) {
+          lastCriticalNotificationAt = Date.now();
+          const notificationError = new Error(
+            [
+              error.message,
+              "",
+              `Transient scan failures: ${consecutiveTransientScanFailures}/${maxFailures}`,
+              "The watcher will keep retrying with backoff."
+            ].join("\n")
+          );
+          await telegram.sendCriticalError(notificationError).catch((telegramError) => {
+            logger.warn(`Critical Telegram notification failed: ${telegramError.message}`);
+          });
+        }
       } else {
         logger.error(error);
         if (
@@ -999,6 +1042,7 @@ if (require.main === module) {
 
 module.exports = {
   isNotifyAllProductsActive,
+  isTransientScanError,
   isTimeWindowActive,
   notificationTriggers,
   nextScanDelayMs,

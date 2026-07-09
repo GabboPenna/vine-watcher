@@ -9,6 +9,7 @@ const { loadConfig } = require("../src/config");
 const { helpMessage, parseCommand, TelegramControl } = require("../src/control");
 const {
   isNotifyAllProductsActive,
+  isTransientScanError,
   isTimeWindowActive,
   notificationTriggers,
   runCycle,
@@ -959,6 +960,14 @@ function testSessionAttentionDeferral() {
   );
 }
 
+function testTransientScanErrorClassification() {
+  assert.equal(isTransientScanError(new Error("page.goto: Timeout 20000ms exceeded")), true);
+  assert.equal(isTransientScanError(new Error("page.goto: net::ERR_FAILED at https://www.amazon.it/vine")), true);
+  assert.equal(isTransientScanError(new Error('Section "Recommended for you" exceeded hard timeout after 30000ms')), true);
+  assert.equal(isTransientScanError(new Error("Amazon session is not valid or login is required")), false);
+  assert.equal(isTransientScanError(new Error("Telegram sendMessage failed")), false);
+}
+
 async function testRunCycleNotifiesAfterEachSection() {
   const events = [];
   const config = loadConfig({
@@ -1541,6 +1550,7 @@ async function main() {
   testTelegramFormatting();
   testSessionStatusClassification();
   testSessionAttentionDeferral();
+  testTransientScanErrorClassification();
   await testRunCycleNotifiesAfterEachSection();
   await testRunCycleParallelProcessesFirstCompletedSection();
   await testRunCycleContinuesAfterSectionFailure();

@@ -56,7 +56,7 @@ Look for long navigation timeouts:
 journalctl -u vine-watcher.service --since "10 minutes ago" --no-pager
 ```
 
-Occasional `page.goto: Timeout ...` or `net::ERR_FAILED` errors on a single Vine queue are usually transient Amazon/network hiccups. Vine Watcher keeps scanning the other configured sections and records the cycle as partial. If every section fails, or Amazon asks for login/CAPTCHA, it is still treated as a real attention condition.
+Occasional `page.goto: Timeout ...` or `net::ERR_FAILED` errors are usually transient Amazon/network hiccups. Vine Watcher keeps scanning the other configured sections and records the cycle as partial. If every section fails for one cycle, the watcher backs off and retries without immediately sending a Telegram critical alert. Telegram is notified only after `TRANSIENT_SCAN_MAX_FAILURES` consecutive transient scan failures. Amazon login/CAPTCHA is still treated as a real attention condition.
 
 For a temporary aggressive window:
 
