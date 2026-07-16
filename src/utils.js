@@ -156,13 +156,19 @@ function nowIso() {
 }
 
 function identityKey(product) {
-  if (product.asin) {
-    return `asin:${product.asin}`;
+  const asin = String(product.asin || product.vine_card_asin || "").trim().toUpperCase();
+  if (asin) {
+    return `asin:${asin}`;
+  }
+  const recommendationId = String(product.vine_recommendation_id || "").trim();
+  if (recommendationId) {
+    return `recommendation:${recommendationId}`;
   }
   if (product.url) {
     return `url:${product.url}`;
   }
-  return `title:${product.normalized_title || normalizeTitle(product.title)}`;
+  const normalizedTitle = product.normalized_title || normalizeTitle(product.title);
+  return normalizedTitle ? `title:${normalizedTitle}` : "";
 }
 
 function uniqueProducts(products) {

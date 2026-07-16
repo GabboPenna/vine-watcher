@@ -14,6 +14,20 @@ Environment=NODE_ENV=production
 Environment=HOME=/var/lib/vinewatcher
 Environment=HEADLESS=false
 Environment=VINE_WATCHER_XVFB=true
+Environment=APP_DIR=/opt/vine-watcher-telegram
+KillMode=control-group
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vine-watcher-telegram/data /var/lib/vinewatcher
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

@@ -2,9 +2,10 @@
 
 const fs = require("fs");
 const { createBrowserContext } = require("./browser");
-const { loadConfig } = require("./config");
+const { loadConfig, validateConfig } = require("./config");
 const { TelegramControl } = require("./control");
 const { createLogger } = require("./logger");
+const { runSqliteMaintenance } = require("./maintenance");
 const {
   formatEuro,
   isNotifyAllProductsActive,
@@ -21,47 +22,18 @@ const {
   VineScanner
 } = require("./scanner");
 const { ProductStorage } = require("./storage");
+const {
+  isPanicActive,
+  memoryRecycleThresholdMb,
+  nextScanDelayMs,
+  nextScanReason,
+  scannerConfigForCycle,
+  updateAdaptiveState
+} = require("./scheduler");
 const { isTimeWindowActive } = require("./time-window");
-const { delayWithJitter, sleep } = require("./utils");
+const { sleep } = require("./utils");
 const { TelegramClient } = require("./telegram");
 const { version } = require("../package.json");
-
-function isPanicActive(config) {
-  return Boolean(config.panicMode || (config.panicUntilMs && Date.now() < config.panicUntilMs));
-}
-
-function nextScanDelayMs(config, adaptiveState = null) {
-  if (isPanicActive(config)) {
-    return delayWithJitter(config.panicScanIntervalSeconds, config.panicScanJitterSeconds);
-  }
-  if (config.adaptiveScanEnabled && adaptiveState) {
-    if (adaptiveState.activeCyclesRemaining > 0) {
-      return delayWithJitter(config.adaptiveActiveIntervalSeconds, config.adaptiveActiveJitterSeconds);
-    }
-    if (adaptiveState.idleCycles >= config.adaptiveIdleAfterCycles) {
-      return delayWithJitter(config.adaptiveIdleIntervalSeconds, config.scanJitterSeconds);
-    }
-  }
-  return delayWithJitter(config.scanIntervalSeconds, config.scanJitterSeconds);
-}
-
-function nextScanReason(config, adaptiveState = null, overrideReason = "") {
-  if (overrideReason) {
-    return overrideReason;
-  }
-  if (isPanicActive(config)) {
-    return "panic mode";
-  }
-  if (config.adaptiveScanEnabled && adaptiveState) {
-    if (adaptiveState.activeCyclesRemaining > 0) {
-      return "adaptive active";
-    }
-    if (adaptiveState.idleCycles >= config.adaptiveIdleAfterCycles) {
-      return "adaptive idle";
-    }
-  }
-  return "";
-}
 
 function secondsSince(timestampMs, now = Date.now()) {
   if (!timestampMs) {
@@ -125,10 +97,12 @@ function shouldDeferSessionAttention(error, config, lastKnownGoodSessionAt, now 
 function isTransientScanError(error) {
   const message = error && error.message ? error.message : String(error || "");
   return (
+    (error && (error.name === "SectionScanTimeoutError" || error.name === "SectionPageInvalidError")) ||
     /page\.goto:.*Timeout/i.test(message) ||
     /TimeoutError:.*page\.goto/i.test(message) ||
     /net::ERR_/i.test(message) ||
-    /exceeded hard timeout/i.test(message)
+    /exceeded hard timeout/i.test(message) ||
+    /Amazon returned HTTP (?:429|5\d\d)/i.test(message)
   );
 }
 
@@ -147,14 +121,51 @@ function safeConfigSnapshot(config) {
     strictMaxNegativeSignals: config.strictMaxNegativeSignals,
     maxNotificationsPerCycle: config.maxNotificationsPerCycle,
     sectionHardTimeoutMs: config.sectionHardTimeoutMs,
+    sectionNavigationRetries: config.sectionNavigationRetries,
     transientScanMaxFailures: config.transientScanMaxFailures,
     sectionScanConcurrency: config.sectionScanConcurrency,
     reuseSectionPages: config.reuseSectionPages,
+    browserMemoryRecycleMinGrowthMb: config.browserMemoryRecycleMinGrowthMb,
     detailValueLookupEnabled: config.detailValueLookupEnabled,
     detailValueLookupMaxPerCycle: config.detailValueLookupMaxPerCycle,
+    detailValueLookupRetryBaseMs: config.detailValueLookupRetryBaseMs,
+    detailValueLookupRetryMaxMs: config.detailValueLookupRetryMaxMs,
     scannerTurboOnlyDuringAdaptiveActive: config.scannerTurboOnlyDuringAdaptiveActive,
     scoringRulesLoaded: config.scoringRulesLoaded,
     sections: config.sections.map((section) => section.name)
+  };
+}
+
+function failedCycleSummary(startedAt, error, failureKind = "error") {
+  const completedAt = Date.now();
+  const startedAtMs = Number(startedAt) || completedAt;
+  const message = error && error.message ? error.message : String(error || "Unknown error");
+  return {
+    startedAt: new Date(startedAtMs).toISOString(),
+    completedAt: new Date(completedAt).toISOString(),
+    scanned: 0,
+    newProducts: 0,
+    notified: 0,
+    dryRunMatches: 0,
+    disappearedProducts: 0,
+    maxScore: "n/d",
+    elapsedSeconds: ((completedAt - startedAtMs) / 1000).toFixed(1),
+    skippedAlreadyNotified: 0,
+    skippedNoTrigger: 0,
+    skippedNotificationLimit: 0,
+    telegramFailures: 0,
+    detailValueLookups: 0,
+    detailValueLookupHits: 0,
+    detailValueLookupFailures: 0,
+    sectionFailures: [],
+    dryRun: false,
+    success: false,
+    failureKind,
+    error: message,
+    outcome: failureKind,
+    reasonNoNotifications: message,
+    sections: [],
+    layoutWarnings: [message]
   };
 }
 
@@ -166,17 +177,31 @@ function hasEstimatedValue(product) {
   return Number.isFinite(parsed) && parsed > 0;
 }
 
-function scoringCanNotify(scoring, config) {
-  if (scoring.score < config.minScoreToNotify) {
+function isValueLookupDue(product, now = Date.now()) {
+  if (hasEstimatedValue(product)) {
     return false;
   }
-  if (!config.strictNotifyMode) {
-    return true;
+  const nextAt = Date.parse(String((product && product.value_lookup_next_at) || ""));
+  return !Number.isFinite(nextAt) || nextAt <= now;
+}
+
+function nextValueLookupRetryAt(product, config, now = Date.now()) {
+  const attempts = Math.max(0, Number((product && product.value_lookup_attempts) || 0));
+  const baseMs = Math.max(1000, Number(config.detailValueLookupRetryBaseMs) || 60000);
+  const maxMs = Math.max(baseMs, Number(config.detailValueLookupRetryMaxMs) || 3600000);
+  const delayMs = Math.min(maxMs, baseMs * 2 ** Math.min(attempts, 8));
+  return new Date(now + delayMs).toISOString();
+}
+
+function storedTelegramMessage(product) {
+  if (!product || !product.telegram_message_id) {
+    return null;
   }
-  return (
-    scoring.positiveSignals >= config.strictMinPositiveSignals &&
-    scoring.negativeSignals <= config.strictMaxNegativeSignals
-  );
+  return {
+    chatId: product.telegram_chat_id || undefined,
+    messageId: Number(product.telegram_message_id),
+    kind: product.telegram_message_kind || "message"
+  };
 }
 
 function layoutWarningsForSummary(summary, config, layoutHealthState = null) {
@@ -202,58 +227,6 @@ function layoutWarningsForSummary(summary, config, layoutHealthState = null) {
   }
 
   return warnings;
-}
-
-function updateAdaptiveState(adaptiveState, summary, config) {
-  if (!config.adaptiveScanEnabled) {
-    adaptiveState.idleCycles = 0;
-    adaptiveState.activeCyclesRemaining = 0;
-    adaptiveState.lastReason = "";
-    return adaptiveState;
-  }
-
-  const movement =
-    Number(summary.newProducts || 0) > 0 ||
-    Number(summary.notified || 0) > 0 ||
-    Number(summary.disappearedProducts || 0) > 0;
-
-  if (movement) {
-    adaptiveState.idleCycles = 0;
-    adaptiveState.activeCyclesRemaining = config.adaptiveActiveCycles;
-    adaptiveState.lastReason = "movement";
-    return adaptiveState;
-  }
-
-  adaptiveState.idleCycles += 1;
-  adaptiveState.activeCyclesRemaining = Math.max(0, adaptiveState.activeCyclesRemaining - 1);
-  adaptiveState.lastReason =
-    adaptiveState.idleCycles >= config.adaptiveIdleAfterCycles ? "idle" : "normal";
-  return adaptiveState;
-}
-
-function isAdaptiveActiveCycle(config, adaptiveState = null) {
-  return Boolean(config.adaptiveScanEnabled && adaptiveState && adaptiveState.activeCyclesRemaining > 0);
-}
-
-function scannerConfigForCycle(config, adaptiveState = null) {
-  const adaptiveActive = isAdaptiveActiveCycle(config, adaptiveState);
-  if (!config.scannerTurboOnlyDuringAdaptiveActive || adaptiveActive) {
-    return {
-      config,
-      adaptiveActive,
-      turboEnabled: true
-    };
-  }
-
-  return {
-    config: {
-      ...config,
-      sectionScanConcurrency: 1,
-      reuseSectionPages: false
-    },
-    adaptiveActive,
-    turboEnabled: false
-  };
 }
 
 async function runCycle({
@@ -310,9 +283,15 @@ async function runCycle({
       detailValueLookups >= detailLookupBudget ||
       hasEstimatedValue(valueProduct) ||
       !valueProduct.vine_recommendation_id ||
-      typeof scanner.enrichProductValue !== "function"
+      typeof scanner.enrichProductValue !== "function" ||
+      !isValueLookupDue(valueProduct)
     ) {
-      return valueProduct;
+      return {
+        product: valueProduct,
+        attempted: false,
+        found: hasEstimatedValue(valueProduct),
+        error: null
+      };
     }
 
     detailValueLookups += 1;
@@ -324,14 +303,54 @@ async function runCycle({
           `Vine detail value found value=${formatEuro(enrichedProduct.estimated_value_eur)} ` +
             `section="${enrichedProduct.section}" title="${enrichedProduct.title}"`
         );
-        return enrichedProduct;
+        return {
+          product: enrichedProduct,
+          attempted: true,
+          found: true,
+          error: null
+        };
       }
+      return {
+        product: valueProduct,
+        attempted: true,
+        found: false,
+        error: null
+      };
     } catch (error) {
       detailValueLookupFailures += 1;
       logger.warn(`Vine detail value lookup failed for "${valueProduct.title}": ${error.message}`);
+      return {
+        product: valueProduct,
+        attempted: true,
+        found: false,
+        error
+      };
     }
+  }
 
-    return valueProduct;
+  function recordDetailLookup(product, lookupResult) {
+    if (!lookupResult || !lookupResult.attempted || !product || !product.id) {
+      return product;
+    }
+    if (typeof storage.recordValueLookupAttempt !== "function") {
+      return product;
+    }
+    const recorded = storage.recordValueLookupAttempt(product.id, {
+      found: lookupResult.found,
+      error: Boolean(lookupResult.error),
+      nextAt: lookupResult.found ? null : nextValueLookupRetryAt(product, config)
+    });
+    if (!recorded) {
+      return product;
+    }
+    return {
+      ...recorded,
+      ...product,
+      value_lookup_attempts: recorded.value_lookup_attempts,
+      value_lookup_last_at: recorded.value_lookup_last_at,
+      value_lookup_next_at: recorded.value_lookup_next_at,
+      value_lookup_status: recorded.value_lookup_status
+    };
   }
 
   async function processSectionProducts(section, products) {
@@ -350,33 +369,38 @@ async function runCycle({
 
       const preliminaryExisting = storage.findExisting(product);
       const preliminaryNotified = preliminaryExisting && preliminaryExisting.notified === 1;
-      let workingProduct = { ...product };
+      let workingProduct = { ...(preliminaryExisting || {}), ...product };
       if (!hasEstimatedValue(workingProduct) && hasEstimatedValue(preliminaryExisting)) {
         workingProduct.estimated_value_eur = preliminaryExisting.estimated_value_eur;
       }
 
       let triggers = notificationTriggers(workingProduct, scoring, config);
       const valueLookupCanUnlockNotification =
-        !preliminaryExisting &&
         !preliminaryNotified &&
         triggers.length === 0 &&
-        config.minValueToNotifyEur > 0;
+        config.minValueToNotifyEur > 0 &&
+        isValueLookupDue(workingProduct);
+      let preliminaryLookup = null;
 
       if (valueLookupCanUnlockNotification) {
-        workingProduct = await lookupDetailValue(workingProduct);
+        preliminaryLookup = await lookupDetailValue(workingProduct);
+        workingProduct = preliminaryLookup.product;
         triggers = notificationTriggers(workingProduct, scoring, config);
       }
 
       const blockers = notificationBlockers(workingProduct, scoring, config, preliminaryNotified);
       const hasTrigger = triggers.length > 0;
       const preliminaryDecision = preliminaryNotified ? "already_notified" : hasTrigger ? "candidate" : "no_trigger";
-      const saved = storage.saveProduct(workingProduct, scoring, {
+      let saved = storage.saveProduct(workingProduct, scoring, {
         inventoryAt,
         triggers,
         blockers,
         configSnapshot,
         decision: preliminaryDecision
       });
+      if (preliminaryLookup && preliminaryLookup.attempted) {
+        saved.product = recordDetailLookup(saved.product, preliminaryLookup);
+      }
       if (saved.isNew) {
         newProducts += 1;
         logger.info(
@@ -387,13 +411,41 @@ async function runCycle({
 
       const shouldNotify = saved.product.notified !== 1 && triggers.length > 0;
       if (!shouldNotify) {
-        storage.saveProduct(saved.product, scoring, {
-          inventoryAt,
-          triggers,
-          blockers: notificationBlockers(saved.product, scoring, config, saved.product.notified === 1),
-          configSnapshot,
-          decision: saved.product.notified === 1 ? "already_notified" : "no_trigger"
-        });
+        if (
+          saved.product.notified === 1 &&
+          !hasEstimatedValue(saved.product) &&
+          saved.product.vine_recommendation_id &&
+          isValueLookupDue(saved.product)
+        ) {
+          const backgroundLookup = await lookupDetailValue(saved.product);
+          if (backgroundLookup.attempted) {
+            if (backgroundLookup.found) {
+              const enrichedSaved = storage.saveProduct(backgroundLookup.product, scoring, {
+                inventoryAt,
+                triggers: notificationTriggers(backgroundLookup.product, scoring, config),
+                blockers: ["already notified"],
+                configSnapshot,
+                decision: "already_notified_value_enriched"
+              });
+              saved.product = enrichedSaved.product;
+              const sentMessage = storedTelegramMessage(saved.product);
+              if (sentMessage && typeof telegram.editProductNotification === "function") {
+                await telegram
+                  .editProductNotification(sentMessage, saved.product, {
+                    ...scoring,
+                    notificationTriggers: notificationTriggers(saved.product, scoring, config)
+                  })
+                  .catch((editError) => {
+                    logger.warn(
+                      `Deferred Telegram value update failed for product id=${saved.product.id}: ${editError.message}`
+                    );
+                  });
+              }
+            }
+            saved.product = recordDetailLookup(saved.product, backgroundLookup);
+          }
+        }
+
         if (saved.product.notified === 1) {
           skippedAlreadyNotified += 1;
         } else {
@@ -420,7 +472,9 @@ async function runCycle({
 
       try {
         const notificationProduct =
-          !hasEstimatedValue(saved.product) && saved.product.vine_recommendation_id
+          !hasEstimatedValue(saved.product) &&
+          saved.product.vine_recommendation_id &&
+          config.detailValueLookupEnabled
             ? { ...saved.product, value_lookup_pending: true }
             : saved.product;
         const sent = dryRun
@@ -440,17 +494,24 @@ async function runCycle({
                 `value=${formatEuro(saved.product.estimated_value_eur)} triggers="${triggers.join("; ")}"`
             );
           } else {
-            storage.markNotified(saved.product.id);
+            const markedProduct = storage.markNotified(saved.product.id, sent);
+            if (markedProduct) {
+              saved.product = markedProduct;
+            }
             notified += 1;
             logger.info(
               `Telegram notification sent for product id=${saved.product.id} score=${scoring.score} ` +
                 `value=${formatEuro(saved.product.estimated_value_eur)} triggers="${triggers.join("; ")}"`
             );
 
-            if (!hasEstimatedValue(saved.product) && saved.product.vine_recommendation_id) {
-              const enrichedProduct = await lookupDetailValue(saved.product);
-              if (hasEstimatedValue(enrichedProduct)) {
-                finalProduct = enrichedProduct;
+            if (
+              !hasEstimatedValue(saved.product) &&
+              saved.product.vine_recommendation_id &&
+              isValueLookupDue(saved.product)
+            ) {
+              const postNotificationLookup = await lookupDetailValue(saved.product);
+              if (postNotificationLookup.attempted && postNotificationLookup.found) {
+                finalProduct = postNotificationLookup.product;
                 finalTriggers = notificationTriggers(finalProduct, scoring, config);
                 if (typeof telegram.editProductNotification === "function") {
                   await telegram
@@ -463,6 +524,7 @@ async function runCycle({
                     });
                 }
               }
+              finalProduct = recordDetailLookup(finalProduct, postNotificationLookup);
             }
           }
           storage.saveProduct(finalProduct, scoring, {
@@ -563,6 +625,11 @@ async function runCycle({
       active.delete(settled.promise);
       if (settled.error) {
         if (settled.error instanceof SessionNeedsAttentionError) {
+          queue.length = 0;
+          if (typeof scanner.cancelActiveScans === "function") {
+            await scanner.cancelActiveScans("Amazon session needs attention");
+          }
+          await Promise.all(active);
           throw settled.error;
         }
         recordSectionFailure(settled.section, settled.error);
@@ -660,6 +727,8 @@ async function main() {
   const storage = new ProductStorage(baseConfig.databasePath, logger.child("storage"));
   const telegram = new TelegramClient(baseConfig, logger.child("telegram"));
   const runtimeStatus = {
+    startedAt: Date.now(),
+    lastSuccessfulCycleAt: 0,
     lastCycle: null,
     memory: null
   };
@@ -677,7 +746,9 @@ async function main() {
   let nextDelayOverrideMs = 0;
   let nextDelayReason = "";
   let lastMemoryRecycleAt = 0;
-  let lastMaintenanceAt = 0;
+  let browserBaselineRssMb = 0;
+  let lastMaintenanceAt = Date.now();
+  let maintenancePromise = null;
   let healthServer = null;
   const adaptiveState = {
     idleCycles: 0,
@@ -689,7 +760,7 @@ async function main() {
   };
 
   function refreshConfig() {
-    effectiveConfig = applyRuntimeSettings(baseConfig, storage.getSettings());
+    effectiveConfig = validateConfig(applyRuntimeSettings(baseConfig, storage.getSettings()));
     return effectiveConfig;
   }
 
@@ -705,18 +776,24 @@ async function main() {
 
     if (config.browserMemoryRecycleMb > 0) {
       const rssMb = Math.round(processTreeRssMb());
+      if (browserBaselineRssMb <= 0 || rssMb < browserBaselineRssMb) {
+        browserBaselineRssMb = rssMb;
+      }
+      const effectiveThresholdMb = memoryRecycleThresholdMb(config, browserBaselineRssMb);
       runtimeStatus.memory = {
         processTreeRssMb: rssMb,
         thresholdMb: config.browserMemoryRecycleMb,
+        baselineMb: browserBaselineRssMb,
+        effectiveThresholdMb,
         cooldownMinutes: Math.round(config.browserMemoryRecycleCooldownMs / 60000),
         lastMemoryRecycleAt
       };
 
       const cooldownActive =
         lastMemoryRecycleAt > 0 && now - lastMemoryRecycleAt < config.browserMemoryRecycleCooldownMs;
-      if (!cooldownActive && rssMb >= config.browserMemoryRecycleMb) {
-        lastMemoryRecycleAt = now;
-        return `memory recycle ${rssMb}MB >= ${config.browserMemoryRecycleMb}MB`;
+      if (!cooldownActive && rssMb >= effectiveThresholdMb) {
+        return `memory recycle ${rssMb}MB >= ${effectiveThresholdMb}MB ` +
+          `(configured=${config.browserMemoryRecycleMb}MB baseline=${browserBaselineRssMb}MB)`;
       }
     }
 
@@ -737,6 +814,10 @@ async function main() {
     refreshConfig();
     context = await createBrowserContext(effectiveConfig, logger.child("browser"));
     browserStartedAt = Date.now();
+    browserBaselineRssMb = 0;
+    if (String(reason).startsWith("memory recycle")) {
+      lastMemoryRecycleAt = browserStartedAt;
+    }
     scanner = new VineScanner({
       context,
       config: effectiveConfig,
@@ -767,6 +848,9 @@ async function main() {
     }
     if (context) {
       await context.close().catch((error) => logger.warn(`Browser close failed: ${error.message}`));
+    }
+    if (maintenancePromise) {
+      await Promise.race([maintenancePromise.catch(() => {}), sleep(5000)]);
     }
     storage.close();
     process.exit(exitCode);
@@ -799,7 +883,7 @@ async function main() {
   control = new TelegramControl({
     telegram,
     storage,
-    getConfig: () => effectiveConfig,
+    getConfig: () => refreshConfig(),
     getStatus: () => runtimeStatus,
     logger: logger.child("control")
   });
@@ -829,6 +913,20 @@ async function main() {
   do {
     refreshConfig();
     scanner.config = effectiveConfig;
+    const cycleStartedAt = Date.now();
+    let cycleFailureKind = "runtime_error";
+    let cycleFailureRecorded = false;
+    const recordCycleFailure = (error) => {
+      if (cycleFailureRecorded || (shuttingDown && isBrowserClosedError(error))) {
+        return;
+      }
+      runtimeStatus.lastCycle = {
+        ...failedCycleSummary(cycleStartedAt, error, cycleFailureKind),
+        dryRun
+      };
+      storage.recordScanCycle(runtimeStatus.lastCycle);
+      cycleFailureRecorded = true;
+    };
     try {
       runtimeStatus.lastCycle = await runCycle({
         scanner,
@@ -850,8 +948,10 @@ async function main() {
       consecutiveSessionAttentionFailures = 0;
       consecutiveTransientScanFailures = 0;
       lastKnownGoodSessionAt = Date.now();
+      runtimeStatus.lastSuccessfulCycleAt = lastKnownGoodSessionAt;
     } catch (error) {
       if (error instanceof SessionNeedsAttentionError) {
+        cycleFailureKind = `session_${error.kind || "attention"}`;
         let sessionAttentionConfirmed = true;
         let confirmedHealthStatus = null;
         if (effectiveConfig.verifySessionAttention && error.confirmable) {
@@ -879,6 +979,7 @@ async function main() {
         }
 
         if (!sessionAttentionConfirmed) {
+          cycleFailureKind = "session_attention_not_confirmed";
           logger.info("Session attention counter reset after successful health check");
         } else {
           consecutiveSessionAttentionFailures += 1;
@@ -933,13 +1034,16 @@ async function main() {
 
           if (willStop) {
             logger.error("Stopping watcher because Amazon session needs manual attention");
+            recordCycleFailure(error);
             await shutdown("session attention", once ? 2 : 0);
             return;
           }
         }
       } else if (shuttingDown && isBrowserClosedError(error)) {
+        cycleFailureKind = "shutdown_interrupted";
         logger.info("Scan interrupted by shutdown");
       } else if (isTransientScanError(error)) {
+        cycleFailureKind = "transient_scan_failure";
         consecutiveTransientScanFailures += 1;
         nextDelayOverrideMs = Math.max(nextDelayOverrideMs, effectiveConfig.transientScanBackoffMs);
         nextDelayReason = "transient scan backoff";
@@ -970,6 +1074,7 @@ async function main() {
           });
         }
       } else {
+        cycleFailureKind = "runtime_error";
         logger.error(error);
         if (
           effectiveConfig.notifyCriticalErrors &&
@@ -981,6 +1086,7 @@ async function main() {
           });
         }
       }
+      recordCycleFailure(error);
     }
 
     if (once || shuttingDown) {
@@ -991,26 +1097,28 @@ async function main() {
     const now = Date.now();
     if (
       effectiveConfig.sqliteVacuumIntervalHours > 0 &&
+      !maintenancePromise &&
       now - lastMaintenanceAt >= effectiveConfig.sqliteVacuumIntervalHours * 60 * 60 * 1000
     ) {
-      const maintenance = storage.cleanup({
-        productDays: effectiveConfig.retentionProductsDays,
-        scanCycleDays: effectiveConfig.retentionScanCyclesDays,
-        vacuum: true
-      });
       lastMaintenanceAt = now;
-      logger.info(
-        `SQLite maintenance complete: deleted_products=${maintenance.deletedProducts} ` +
-          `deleted_cycles=${maintenance.deletedScanCycles} vacuumed=${maintenance.vacuumed}`
-      );
+      maintenancePromise = runSqliteMaintenance(effectiveConfig)
+        .then((maintenance) => {
+          logger.info(
+            `SQLite maintenance complete: deleted_products=${maintenance.deletedProducts} ` +
+              `deleted_cycles=${maintenance.deletedScanCycles} checkpointed=${maintenance.checkpointed} ` +
+              `vacuumed=${maintenance.vacuumed}`
+          );
+        })
+        .catch((error) => {
+          logger.warn(`SQLite maintenance failed: ${error.message}`);
+        })
+        .finally(() => {
+          maintenancePromise = null;
+        });
     }
 
     const recycleReason = browserRestartReason(effectiveConfig);
-    if (recycleReason) {
-      await openBrowserContext(recycleReason);
-    } else {
-      scanner.config = effectiveConfig;
-    }
+    scanner.config = effectiveConfig;
     const waitMs =
       nextDelayOverrideMs > 0 ? nextDelayOverrideMs : nextScanDelayMs(effectiveConfig, adaptiveState);
     const reason = nextScanReason(effectiveConfig, adaptiveState, nextDelayReason);
@@ -1019,6 +1127,9 @@ async function main() {
     nextDelayReason = "";
     logger.info(`Next scan in ${Math.round(waitMs / 1000)}s${waitReason}`);
     await sleep(waitMs);
+    if (recycleReason && !shuttingDown) {
+      await openBrowserContext(recycleReason);
+    }
   } while (!shuttingDown);
 
   if (context) {
@@ -1029,6 +1140,9 @@ async function main() {
   }
   if (control) {
     control.stop();
+  }
+  if (maintenancePromise) {
+    await Promise.race([maintenancePromise.catch(() => {}), sleep(5000)]);
   }
   storage.close();
 }

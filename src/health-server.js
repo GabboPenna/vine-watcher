@@ -44,6 +44,7 @@ function metricLine(name, value, help = "") {
 
 function metricsText(stats, status) {
   const totals = stats.totals || {};
+  const scanCycles = stats.scanCycles || {};
   const lastCycle = status.lastCycle || {};
   return [
     metricLine("vine_watcher_products_total", totals.total, "Saved products in the local database"),
@@ -51,9 +52,22 @@ function metricsText(stats, status) {
     metricLine("vine_watcher_products_gone", totals.gone, "Products that disappeared from the latest inventory"),
     metricLine("vine_watcher_products_notified", totals.notified, "Products already notified"),
     metricLine("vine_watcher_products_reappeared", totals.reappeared, "Products that disappeared and later reappeared"),
+    metricLine("vine_watcher_value_lookup_pending", totals.value_lookup_pending, "Products waiting for a Vine value"),
+    metricLine("vine_watcher_scan_cycles_total", scanCycles.total, "Saved scan cycles"),
+    metricLine("vine_watcher_scan_cycles_failed", scanCycles.failed, "Failed scan cycles"),
     metricLine("vine_watcher_last_cycle_scanned", lastCycle.scanned, "Products scanned in the latest cycle"),
     metricLine("vine_watcher_last_cycle_new", lastCycle.newProducts, "New products found in the latest cycle"),
     metricLine("vine_watcher_last_cycle_notified", lastCycle.notified, "Notifications sent in the latest cycle"),
+    metricLine(
+      "vine_watcher_last_cycle_success",
+      status.lastCycle ? (lastCycle.success === false ? 0 : 1) : 0,
+      "Whether the latest cycle succeeded"
+    ),
+    metricLine(
+      "vine_watcher_last_success_age_seconds",
+      status.lastSuccessfulCycleAt ? (Date.now() - status.lastSuccessfulCycleAt) / 1000 : -1,
+      "Seconds since the latest successful scan cycle"
+    ),
     metricLine("vine_watcher_last_cycle_dry_run_matches", lastCycle.dryRunMatches, "Dry-run matches in the latest cycle"),
     metricLine("vine_watcher_last_cycle_disappeared", lastCycle.disappearedProducts, "Products marked gone in the latest cycle"),
     metricLine(
@@ -80,11 +94,22 @@ function startHealthServer({ config, storage, getStatus, logger, version = "" })
     const stats = storage.getStats();
 
     if (url.pathname === "/health") {
-      jsonResponse(response, 200, {
-        ok: true,
+      const now = Date.now();
+      const lastSuccessfulCycleAt = Number(status.lastSuccessfulCycleAt || 0);
+      const successAgeMs = lastSuccessfulCycleAt ? now - lastSuccessfulCycleAt : null;
+      const startupAgeMs = now - Number(status.startedAt || now);
+      const fresh =
+        successAgeMs !== null
+          ? successAgeMs <= config.healthStaleAfterMs
+          : startupAgeMs <= Math.max(config.healthStaleAfterMs, 60000);
+      jsonResponse(response, fresh ? 200 : 503, {
+        ok: fresh,
+        degraded: Boolean(status.lastCycle && status.lastCycle.success === false),
         version,
         uptimeSeconds: Math.round(process.uptime()),
         lastCycle: status.lastCycle || null,
+        lastSuccessfulCycleAt: lastSuccessfulCycleAt || null,
+        successAgeSeconds: successAgeMs === null ? null : Math.round(successAgeMs / 1000),
         memory: status.memory || null,
         stats: stats.totals || {}
       });

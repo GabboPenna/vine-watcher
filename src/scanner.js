@@ -30,8 +30,24 @@ class SectionScanTimeoutError extends Error {
   }
 }
 
+class SectionPageInvalidError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = "SectionPageInvalidError";
+    this.details = details;
+  }
+}
+
 function isBrowserClosedError(error) {
   return /Target page, context or browser has been closed/i.test(error && error.message ? error.message : String(error));
+}
+
+function isRetryableSectionError(error) {
+  if (error instanceof SectionScanTimeoutError || error instanceof SectionPageInvalidError) {
+    return true;
+  }
+  const message = error && error.message ? error.message : String(error || "");
+  return /page\.goto:.*Timeout|net::ERR_|exceeded hard timeout/i.test(message);
 }
 
 function sectionHardTimeoutMs(config) {
@@ -148,6 +164,7 @@ class VineScanner {
     this.config = config;
     this.logger = logger;
     this.sectionPages = new Map();
+    this.activeScanPages = new Set();
   }
 
   async scanAllSections() {
@@ -163,8 +180,38 @@ class VineScanner {
   }
 
   async scanSection(section) {
+    const retries = Math.max(0, Math.floor(Number(this.config.sectionNavigationRetries || 0)));
+    let lastError = null;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        return await this.scanSectionAttempt(section);
+      } catch (error) {
+        lastError = error;
+        if (
+          error instanceof SessionNeedsAttentionError ||
+          isBrowserClosedError(error) ||
+          !isRetryableSectionError(error) ||
+          attempt >= retries
+        ) {
+          throw error;
+        }
+        const delayMs = Math.max(0, Number(this.config.sectionNavigationRetryDelayMs || 0));
+        this.logger.warn(
+          `Retrying section "${section.name}" after transient failure ` +
+            `(attempt ${attempt + 2}/${retries + 1}): ${error.message}`
+        );
+        if (delayMs > 0) {
+          await sleep(delayMs);
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  async scanSectionAttempt(section) {
     const reusePage = Boolean(this.config.reuseSectionPages);
     const page = await this.pageForSection(section, reusePage);
+    this.activeScanPages.add(page);
     const hardTimeoutMs = sectionHardTimeoutMs(this.config);
     let watchdogTimer = null;
     let watchdogTriggered = false;
@@ -201,6 +248,7 @@ class VineScanner {
       throw error;
     } finally {
       clearTimeout(watchdogTimer);
+      this.activeScanPages.delete(page);
       if (!reusePage && !watchdogTriggered) {
         await closePageQuietly(page);
       }
@@ -214,8 +262,13 @@ class VineScanner {
       timeout: this.config.pageTimeoutMs
     });
 
-    if (response && response.status() >= 500) {
-      this.logger.warn(`Amazon returned HTTP ${response.status()} for ${section.name}`);
+    const httpStatus = response ? response.status() : 0;
+    if (httpStatus === 429 || httpStatus >= 500) {
+      throw new SectionPageInvalidError(`Amazon returned HTTP ${httpStatus} for "${section.name}"`, {
+        sectionName: section.name,
+        sectionUrl: section.url,
+        httpStatus
+      });
     }
 
     await this.waitForReadableDom(page, section);
@@ -246,6 +299,22 @@ class VineScanner {
       .filter((product) => product.title && (product.asin || product.url));
 
     const unique = uniqueProducts(products);
+    if (unique.length === 0) {
+      const inventoryStatus = await readInventoryStatus(page);
+      const validEmptyInventory = inventoryStatus.hasInventoryStructure || inventoryStatus.hasExplicitEmptyState;
+      if (inventoryStatus.hasAmazonErrorText || !validEmptyInventory || httpStatus === 401 || httpStatus === 403) {
+        throw new SectionPageInvalidError(
+          `The "${section.name}" page returned no products and no trustworthy empty inventory state`,
+          {
+            sectionName: section.name,
+            sectionUrl: section.url,
+            httpStatus,
+            ...inventoryStatus
+          }
+        );
+      }
+      this.logger.info(`Section "${section.name}" contains a confirmed empty Vine inventory`);
+    }
     this.logger.info(`Section "${section.name}" scanned: ${unique.length} product candidates`);
     return unique;
   }
@@ -281,6 +350,20 @@ class VineScanner {
   async close() {
     const pages = Array.from(this.sectionPages.values());
     this.sectionPages.clear();
+    await Promise.all(pages.map((page) => closePageQuietly(page)));
+  }
+
+  async cancelActiveScans(reason = "cycle cancelled") {
+    const pages = Array.from(this.activeScanPages);
+    if (pages.length === 0) {
+      return;
+    }
+    this.logger.warn(`Cancelling ${pages.length} active section scan(s): ${reason}`);
+    for (const [key, page] of this.sectionPages.entries()) {
+      if (this.activeScanPages.has(page)) {
+        this.sectionPages.delete(key);
+      }
+    }
     await Promise.all(pages.map((page) => closePageQuietly(page)));
   }
 
@@ -407,11 +490,18 @@ class VineScanner {
     const response = await this.context.request.get(url, {
       timeout
     });
-    const ok = typeof response.ok === "function" ? response.ok() : response.status() >= 200 && response.status() < 300;
-    if (!ok) {
-      throw new Error(`Vine detail lookup failed: HTTP ${response.status()}`);
+    try {
+      const ok =
+        typeof response.ok === "function" ? response.ok() : response.status() >= 200 && response.status() < 300;
+      if (!ok) {
+        throw new Error(`Vine detail lookup failed: HTTP ${response.status()}`);
+      }
+      return await response.json();
+    } finally {
+      if (typeof response.dispose === "function") {
+        await response.dispose().catch(() => {});
+      }
     }
-    return response.json();
   }
 
   pickDetailItemAsin(product, recommendationResult, directItem) {
@@ -535,6 +625,45 @@ async function readSessionStatus(page) {
       hasVineCard,
       hasVineText: lower.includes("vine"),
       hasVineUrl: url.includes("/vine/")
+    };
+  });
+}
+
+async function readInventoryStatus(page) {
+  return page.evaluate(() => {
+    const text = String((document.body && document.body.innerText) || "").toLowerCase();
+    const hasInventoryStructure = Boolean(
+      document.querySelector(
+        [
+          "#vvp-items-grid",
+          "#vvp-items-grid-container",
+          ".vvp-items-grid",
+          ".vvp-items-grid-container",
+          ".vvp-tab-content",
+          '[data-testid*="vine" i]'
+        ].join(",")
+      )
+    );
+    const emptyPhrases = [
+      "nessun prodotto",
+      "non ci sono prodotti",
+      "non ci sono articoli",
+      "nessun articolo",
+      "no products",
+      "no items",
+      "there are no items",
+      "there are no products",
+      "we do not have any offers",
+      "non abbiamo offerte"
+    ];
+    return {
+      hasInventoryStructure,
+      hasExplicitEmptyState: emptyPhrases.some((phrase) => text.includes(phrase)),
+      hasAmazonErrorText:
+        text.includes("service unavailable") ||
+        text.includes("sorry, something went wrong") ||
+        text.includes("si e verificato un problema") ||
+        text.includes("si è verificato un problema")
     };
   });
 }
@@ -774,6 +903,8 @@ function extractProductsFromPage(args) {
 module.exports = {
   classifySessionStatus,
   isBrowserClosedError,
+  isRetryableSectionError,
+  SectionPageInvalidError,
   SectionScanTimeoutError,
   SessionNeedsAttentionError,
   sectionHardTimeoutMs,

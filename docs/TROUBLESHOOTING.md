@@ -56,7 +56,7 @@ Look for long navigation timeouts:
 journalctl -u vine-watcher.service --since "10 minutes ago" --no-pager
 ```
 
-Occasional `page.goto: Timeout ...` or `net::ERR_FAILED` errors are usually transient Amazon/network hiccups. Vine Watcher keeps scanning the other configured sections and records the cycle as partial. If every section fails for one cycle, the watcher backs off and retries without immediately sending a Telegram critical alert. Telegram is notified only after `TRANSIENT_SCAN_MAX_FAILURES` consecutive transient scan failures. Amazon login/CAPTCHA is still treated as a real attention condition.
+Occasional `page.goto: Timeout ...` or `net::ERR_FAILED` errors are usually transient Amazon/network hiccups. Each section is retried according to `SECTION_NAVIGATION_RETRIES`; Vine Watcher then keeps scanning the other configured sections and records either the partial or failed cycle in SQLite. Telegram is notified only after `TRANSIENT_SCAN_MAX_FAILURES` consecutive transient scan failures. Amazon login/CAPTCHA is still treated as a real attention condition.
 
 For a temporary aggressive window:
 
@@ -78,7 +78,12 @@ SECTION_SCAN_CONCURRENCY=1
 REUSE_SECTION_PAGES=false
 SECTION_HARD_TIMEOUT_SECONDS=30
 BROWSER_MEMORY_RECYCLE_MB=900
+BROWSER_MEMORY_RECYCLE_MIN_GROWTH_MB=256
 ```
+
+The memory threshold now includes growth above Chromium's measured baseline. If logs still show a recycle exactly every cooldown, inspect `/health` or `/metrics` for `baselineMb` and `effectiveThresholdMb` before lowering the limit.
+
+If a value is temporarily unavailable, do not reset the database. The durable lookup queue retries it automatically; `/why <product>` shows the latest local decision and value state.
 
 ## Too Many Notifications
 

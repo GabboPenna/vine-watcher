@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/opt/vine-watcher-telegram}"
-SERVICE_USER="${SERVICE_USER:-vinewatcher}"
+DEFAULTS_FILE="${VINE_WATCHER_DEFAULTS_FILE:-/etc/default/vine-watcher}"
+VINE_WATCHER_APP_DIR=""
+VINE_WATCHER_SERVICE_USER=""
+if [ -r "$DEFAULTS_FILE" ]; then
+  # Written by install-debian.sh; contains only validated paths and account names.
+  # shellcheck source=/dev/null
+  source "$DEFAULTS_FILE"
+fi
+APP_DIR="${APP_DIR:-${VINE_WATCHER_APP_DIR:-/opt/vine-watcher-telegram}}"
+SERVICE_USER="${SERVICE_USER:-${VINE_WATCHER_SERVICE_USER:-vinewatcher}}"
 RUN_DIR="${RUN_DIR:-/tmp/vine-watcher-login}"
 DISPLAY_ID="${DISPLAY_ID:-:99}"
 VNC_PORT="${VNC_PORT:-5901}"
@@ -71,16 +79,22 @@ host_name() {
 
 start_login() {
   need_root "$@"
+  local service_group
+  service_group="$(id -gn "$SERVICE_USER")"
+  if systemctl is-active --quiet vine-watcher.service; then
+    echo "Stopping vine-watcher.service so Chromium can use the persistent profile safely..."
+    systemctl stop vine-watcher.service
+  fi
   install_packages
   mkdir -p "$RUN_DIR"
-  chown "$SERVICE_USER:$SERVICE_USER" "$RUN_DIR"
+  chown "$SERVICE_USER:$service_group" "$RUN_DIR"
   stop_processes
   rm -f "${RUN_DIR}"/*.log "$DONE_FILE"
   create_vnc_password
 
   runuser -u "$SERVICE_USER" -- x11vnc -storepasswd "$VNC_PASSWORD" "$PASS_FILE" >/dev/null 2>&1
   chmod 600 "$PASS_FILE"
-  chown "$SERVICE_USER:$SERVICE_USER" "$PASS_FILE"
+  chown "$SERVICE_USER:$service_group" "$PASS_FILE"
 
   runuser -u "$SERVICE_USER" -- sh -c "nohup Xvfb $DISPLAY_ID -screen 0 1365x900x24 -nolisten tcp >$RUN_DIR/xvfb.log 2>&1 & echo \$! >$RUN_DIR/xvfb.pid"
   sleep 1
@@ -108,8 +122,10 @@ start_login() {
 
 finish_login() {
   need_root "$@"
+  local service_group
+  service_group="$(id -gn "$SERVICE_USER")"
   touch "$DONE_FILE"
-  chown "$SERVICE_USER:$SERVICE_USER" "$DONE_FILE"
+  chown "$SERVICE_USER:$service_group" "$DONE_FILE"
   echo "Closing Chromium cleanly and saving the persistent profile..."
   sleep 6
   tail -n 20 "$RUN_DIR/login.log" 2>/dev/null || true

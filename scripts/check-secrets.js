@@ -2,7 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { projectFiles, projectRoot } = require("./check-files");
 
 const allowedDataFiles = new Set(["data/.gitkeep"]);
 
@@ -29,14 +29,8 @@ const patterns = [
   }
 ];
 
-function trackedFiles() {
-  return execFileSync("git", ["ls-files"], { encoding: "utf8" })
-    .split(/\r?\n/)
-    .filter(Boolean);
-}
-
 function isTextFile(file) {
-  const buffer = fs.readFileSync(file);
+  const buffer = fs.readFileSync(path.join(projectRoot, file));
   return !buffer.includes(0);
 }
 
@@ -56,9 +50,10 @@ function isForbiddenTrackedPath(file) {
 
 function main() {
   const failures = [];
+  const discovery = projectFiles();
 
-  for (const file of trackedFiles()) {
-    if (isForbiddenTrackedPath(file)) {
+  for (const file of discovery.files) {
+    if (discovery.fromGit && isForbiddenTrackedPath(file)) {
       failures.push(`${file}: forbidden tracked runtime/private file`);
       continue;
     }
@@ -67,7 +62,7 @@ function main() {
       continue;
     }
 
-    const text = fs.readFileSync(file, "utf8");
+    const text = fs.readFileSync(path.join(projectRoot, file), "utf8");
     for (const pattern of patterns) {
       const match = text.match(pattern.regex);
       if (match) {

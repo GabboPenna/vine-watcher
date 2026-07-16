@@ -21,6 +21,8 @@ function main() {
   const stats = storage.getStats();
   console.log("Totals");
   console.table([stats.totals]);
+  console.log("Scan cycles");
+  console.table([stats.scanCycles]);
   console.log("By section");
   printTable(stats.bySection, ["section", "total", "present", "notified"]);
   console.log("Top products");

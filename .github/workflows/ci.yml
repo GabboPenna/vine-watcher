@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     name: Validate on Node.js ${{ matrix.node-version }}
@@ -36,3 +40,6 @@ jobs:
 
       - name: Run validation suite
         run: npm run validate
+
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high

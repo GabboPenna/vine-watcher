@@ -1,6 +1,6 @@
 "use strict";
 
-const { truncate } = require("./utils");
+const { sleep, truncate } = require("./utils");
 
 function formatEuro(value) {
   if (value === null || value === undefined || value === "") {
@@ -139,6 +139,8 @@ class TelegramClient {
     this.chatId = config.telegramChatId;
     this.logger = logger;
     this.enabled = Boolean(this.token && this.chatId);
+    this.requestTimeoutMs = Math.max(5000, Number(config.telegramRequestTimeoutMs) || 15000);
+    this.requestRetries = Math.max(0, Math.floor(Number(config.telegramRequestRetries) || 0));
   }
 
   async request(method, payload) {
@@ -147,27 +149,68 @@ class TelegramClient {
       return null;
     }
 
-    const response = await fetch(`https://api.telegram.org/bot${this.token}/${method}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
+    const longPollMs = Math.max(0, Number(payload && payload.timeout) || 0) * 1000;
+    const timeoutMs = Math.max(this.requestTimeoutMs, longPollMs + 5000);
+    let lastError = null;
 
-    let body = null;
-    try {
-      body = await response.json();
-    } catch (_error) {
-      body = {};
+    for (let attempt = 0; attempt <= this.requestRetries; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let retryAfterMs = 0;
+      let retryable = true;
+
+      try {
+        const response = await fetch(`https://api.telegram.org/bot${this.token}/${method}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+
+        let body = null;
+        try {
+          body = await response.json();
+        } catch (_error) {
+          body = {};
+        }
+
+        if (response.ok && body.ok) {
+          return body.result;
+        }
+
+        const description = body.description || `${response.status} ${response.statusText}`;
+        const error = new Error(`Telegram ${method} failed: ${description}`);
+        error.status = response.status;
+        retryAfterMs = Math.max(0, Number(body.parameters && body.parameters.retry_after) || 0) * 1000;
+        retryable = response.status === 429 || response.status >= 500;
+        lastError = error;
+        if (!retryable) {
+          throw error;
+        }
+      } catch (error) {
+        lastError = error && error.name === "AbortError"
+          ? new Error(`Telegram ${method} timed out after ${timeoutMs}ms`)
+          : error;
+        if (!retryable || (error && error.status && error.status < 500 && error.status !== 429)) {
+          throw lastError;
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (attempt < this.requestRetries) {
+        const retryDelayMs = retryAfterMs || Math.min(5000, 500 * 2 ** attempt);
+        this.logger.warn(
+          `Telegram ${method} transient failure; retrying in ${retryDelayMs}ms ` +
+            `(attempt ${attempt + 2}/${this.requestRetries + 1})`
+        );
+        await sleep(retryDelayMs);
+      }
     }
 
-    if (!response.ok || !body.ok) {
-      const description = body.description || `${response.status} ${response.statusText}`;
-      throw new Error(`Telegram ${method} failed: ${description}`);
-    }
-
-    return body.result;
+    throw lastError || new Error(`Telegram ${method} failed`);
   }
 
   formatProductMessage(product, scoring) {
@@ -249,6 +292,7 @@ class TelegramClient {
     const replyMarkup = this.productReplyMarkup(product);
 
     if (product.image_url) {
+      let photoResult = null;
       try {
         const caption = message.length <= 1024 ? message : this.formatProductPhotoCaption(product, scoring);
         const payload = {
@@ -260,7 +304,7 @@ class TelegramClient {
         if (replyMarkup) {
           payload.reply_markup = replyMarkup;
         }
-        const photoResult = await this.request("sendPhoto", payload);
+        photoResult = await this.request("sendPhoto", payload);
         if (message.length > 1024) {
           const detailsPayload = {
             chat_id: this.chatId,
@@ -271,7 +315,9 @@ class TelegramClient {
           if (replyMarkup) {
             detailsPayload.reply_markup = replyMarkup;
           }
-          await this.request("sendMessage", detailsPayload);
+          await this.request("sendMessage", detailsPayload).catch((error) => {
+            this.logger.warn(`Telegram product details message failed after photo was sent: ${error.message}`);
+          });
         }
         return {
           sent: true,
@@ -280,7 +326,10 @@ class TelegramClient {
           messageId: photoResult.message_id
         };
       } catch (error) {
-        this.logger.warn(`sendPhoto failed, falling back to sendMessage: ${error.message}`);
+        if (photoResult) {
+          throw error;
+        }
+        this.logger.warn(`sendPhoto failed before delivery, falling back to sendMessage: ${error.message}`);
       }
     }
 

@@ -2,8 +2,6 @@ name: Docker
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*.*.*"
   pull_request:
@@ -11,6 +9,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -20,6 +22,12 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Validate release metadata
+        env:
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: node scripts/check-release.js
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -35,7 +43,10 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Smoke test image
-        run: docker run --rm vine-watcher:ci npm test
+        run: >-
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges
+          --shm-size 1g vine-watcher:ci bash -lc
+          'npm run validate && xvfb-run -a npm run smoke:browser'
 
   publish-dockerhub:
     name: Publish Docker Hub image
@@ -87,7 +98,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,prefix=sha-
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
           labels: |
             org.opencontainers.image.title=Vine Watcher
             org.opencontainers.image.description=Local Amazon Vine watcher with Telegram notifications
@@ -103,3 +114,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true

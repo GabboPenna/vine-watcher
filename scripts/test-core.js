@@ -2,11 +2,14 @@
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
+const { once } = require("node:events");
 
-const { loadConfig } = require("../src/config");
+const { loadConfig, validateConfig } = require("../src/config");
 const { helpMessage, parseCommand, TelegramControl } = require("../src/control");
+const { startHealthServer } = require("../src/health-server");
 const {
   isNotifyAllProductsActive,
   isTransientScanError,
@@ -17,7 +20,14 @@ const {
   shouldDeferSessionAttention
 } = require("../src/index");
 const { applyRuntimeSettings } = require("../src/runtime-config");
-const { classifySessionStatus, sectionHardTimeoutMs, VineScanner } = require("../src/scanner");
+const {
+  classifySessionStatus,
+  SectionPageInvalidError,
+  sectionHardTimeoutMs,
+  SessionNeedsAttentionError,
+  VineScanner
+} = require("../src/scanner");
+const { memoryRecycleThresholdMb } = require("../src/scheduler");
 const { scoreProduct } = require("../src/scorer");
 const { ProductStorage } = require("../src/storage");
 const { TelegramClient } = require("../src/telegram");
@@ -233,6 +243,29 @@ function testRuntimeSettings() {
   assert.equal(config.scannerTurboOnlyDuringAdaptiveActive, true);
 }
 
+function testConfigValidation() {
+  const config = loadConfig();
+  assert.throws(
+    () =>
+      validateConfig({
+        ...config,
+        sections: [
+          { name: "Duplicate", url: "https://www.amazon.it/vine/vine-items?queue=potluck" },
+          { name: "Duplicate", url: "https://www.amazon.it/vine/vine-items?queue=encore" }
+        ]
+      }),
+    /Duplicate Vine section name/
+  );
+  assert.throws(
+    () => validateConfig({ ...config, notifyAllProductsWindow: "25:00-26:00" }),
+    /Invalid NOTIFY_ALL_PRODUCTS_WINDOW/
+  );
+  assert.throws(
+    () => validateConfig({ ...config, detailValueLookupRetryBaseMs: 60000, detailValueLookupRetryMaxMs: 30000 }),
+    /RETRY_MAX_SECONDS/
+  );
+}
+
 function testExternalScoringRules() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vine-watcher-rules-"));
   const previousPath = process.env.SCORING_RULES_PATH;
@@ -307,6 +340,7 @@ function testScannerFixtures() {
 
 async function testScannerDetailValueLookup() {
   const calls = [];
+  let disposedResponses = 0;
   const scanner = new VineScanner({
     context: {
       request: {
@@ -346,6 +380,9 @@ async function testScannerDetailValueLookup() {
                 },
                 error: null
               };
+            },
+            async dispose() {
+              disposedResponses += 1;
             }
           };
         }
@@ -371,7 +408,60 @@ async function testScannerDetailValueLookup() {
   assert.equal(enriched.estimated_value_eur, 24.99);
   assert.equal(enriched.image_url, "https://m.media-amazon.com/images/I/example._SS180_.jpg");
   assert.equal(calls.length, 2);
+  assert.equal(disposedResponses, 2);
   assert.match(calls[1].url, /\/item\/B0VARIANT1\?imageSize=180$/);
+}
+
+async function testScannerRejectsHttpFailureAndRetries() {
+  let pagesCreated = 0;
+  let pagesClosed = 0;
+  const context = {
+    async newPage() {
+      pagesCreated += 1;
+      let closed = false;
+      return {
+        isClosed() {
+          return closed;
+        },
+        async close() {
+          closed = true;
+          pagesClosed += 1;
+        },
+        async goto() {
+          return {
+            status() {
+              return 503;
+            }
+          };
+        }
+      };
+    }
+  };
+  const scanner = new VineScanner({
+    context,
+    config: loadConfig({
+      sections: [{ name: "Retry section", url: "https://www.amazon.it/vine/vine-items?queue=encore" }],
+      sectionNavigationRetries: 1,
+      sectionNavigationRetryDelayMs: 0,
+      reuseSectionPages: false
+    }),
+    logger: silentLogger
+  });
+
+  await assert.rejects(scanner.scanSection(scanner.config.sections[0]), SectionPageInvalidError);
+  assert.equal(pagesCreated, 2);
+  assert.equal(pagesClosed, 2);
+}
+
+function testMemoryRecycleThresholdUsesGrowth() {
+  assert.equal(
+    memoryRecycleThresholdMb({ browserMemoryRecycleMb: 1200, browserMemoryRecycleMinGrowthMb: 256 }, 1200),
+    1456
+  );
+  assert.equal(
+    memoryRecycleThresholdMb({ browserMemoryRecycleMb: 1500, browserMemoryRecycleMinGrowthMb: 256 }, 1000),
+    1500
+  );
 }
 
 function testStorageEstimatedValue() {
@@ -389,6 +479,9 @@ function testStorageEstimatedValue() {
     section: "Recommended for you",
     image_url: "",
     estimated_value_eur: 42.5,
+    vine_recommendation_id: "APJ#B002KTID3A#vine.enrollment.test",
+    vine_card_asin: "B002KTID3A",
+    vine_recommendation_type: "SEARCH",
     raw_text: "42,50\u20ac"
   };
 
@@ -405,6 +498,8 @@ function testStorageEstimatedValue() {
   );
   assert.equal(saved.product.present_now, 1);
   assert.equal(JSON.parse(saved.product.last_triggers_json)[0], "score 25 >= 20");
+  assert.equal(saved.product.vine_recommendation_id, product.vine_recommendation_id);
+  assert.equal(saved.product.identity_key, `asin:${product.asin}`);
 
   storage.saveProduct({ ...product, estimated_value_eur: null, raw_text: "" }, { score: 25, reasons: [] }, {
     inventoryAt: "2026-06-20T10:01:00.000Z",
@@ -412,9 +507,37 @@ function testStorageEstimatedValue() {
   });
   assert.equal(
     storage.db.prepare("select estimated_value_eur from products where asin = ?").get(product.asin).estimated_value_eur,
-    null
+    42.5
   );
-  assert.equal(storage.markMissingProducts("2026-06-20T10:02:00.000Z"), 1);
+
+  const sameTitleDifferentAsin = storage.saveProduct(
+    {
+      ...product,
+      asin: "B002KTID3B",
+      url: "https://www.amazon.it/dp/B002KTID3B",
+      vine_recommendation_id: "APJ#B002KTID3B#vine.enrollment.test",
+      vine_card_asin: "B002KTID3B"
+    },
+    { score: 25, reasons: ["brand: bosch"] },
+    { inventoryAt: "2026-06-20T10:01:30.000Z", decision: "candidate" }
+  );
+  assert.equal(sameTitleDifferentAsin.isNew, true);
+  assert.notEqual(sameTitleDifferentAsin.product.id, saved.product.id);
+  assert.equal(
+    storage.db.prepare("select count(*) as count from products where normalized_title = ?").get(product.normalized_title).count,
+    2
+  );
+
+  const marked = storage.markNotified(saved.product.id, { kind: "photo", chatId: 123, messageId: 456 });
+  assert.equal(marked.telegram_chat_id, "123");
+  assert.equal(marked.telegram_message_id, 456);
+  const attempted = storage.recordValueLookupAttempt(saved.product.id, {
+    found: false,
+    nextAt: "2026-06-20T11:00:00.000Z"
+  });
+  assert.equal(attempted.value_lookup_attempts, 1);
+  assert.equal(attempted.value_lookup_status, "missing");
+  assert.equal(storage.markMissingProducts("2026-06-20T10:02:00.000Z"), 2);
   assert.equal(storage.recentProducts({ mode: "gone", limit: 1 })[0].present_now, 0);
   storage.saveProduct(product, { score: 25, reasons: ["brand: bosch"] }, {
     inventoryAt: "2026-06-20T10:03:00.000Z",
@@ -467,6 +590,17 @@ function testStorageEstimatedValue() {
   });
   assert.equal(storage.recentScanCycles(1)[0].outcome, "sent_notifications");
   assert.equal(JSON.parse(storage.recentScanCycles(1)[0].layout_warnings_json)[0], "fixture warning");
+  storage.recordScanCycle({
+    startedAt: "2026-06-20T10:01:00.000Z",
+    completedAt: "2026-06-20T10:01:20.000Z",
+    success: false,
+    failureKind: "transient_scan_failure",
+    error: "page.goto timed out",
+    outcome: "transient_scan_failure"
+  });
+  const failedCycle = storage.recentScanCycles(1)[0];
+  assert.equal(failedCycle.success, 0);
+  assert.equal(failedCycle.failure_kind, "transient_scan_failure");
   assert.equal(storage.searchProducts("bosch", 1)[0].asin, product.asin);
   assert.ok(storage.recentProducts({ mode: "all", limit: 2 }).some((row) => row.asin === product.asin));
   const cleanup = storage.cleanup({ productDays: 1, scanCycleDays: 1, vacuum: false });
@@ -598,6 +732,7 @@ async function testTelegramControlCommands() {
     getConfig: () =>
       applyRuntimeSettings(
         loadConfig({
+          telegramBotToken: "123456:test-token",
           telegramChatId: "123",
           telegramControlEnabled: true,
           telegramControlLanguage: "it",
@@ -1410,6 +1545,277 @@ async function testRunCycleUpdatesNotificationAfterDetailValueLookup() {
   assert.equal(summary.detailValueLookupHits, 1);
 }
 
+async function testRunCyclePersistsValuePipeline() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vine-watcher-value-pipeline-"));
+  const storage = new ProductStorage(path.join(dir, "products.sqlite"), silentLogger);
+  storage.init();
+  const section = { name: "Additional items", url: "https://www.amazon.it/vine/vine-items?queue=encore" };
+  const config = loadConfig({
+    sections: [section],
+    notifyAllProducts: true,
+    notifyAllProductsWindow: "",
+    maxNotificationsPerCycle: 5,
+    detailValueLookupEnabled: true,
+    detailValueLookupMaxPerCycle: 5,
+    detailValueLookupRetryBaseMs: 5000,
+    detailValueLookupRetryMaxMs: 60000,
+    sectionDelayMs: 0
+  });
+  const product = {
+    asin: "B0REALV001",
+    title: "Real storage value product",
+    normalized_title: "real storage value product",
+    url: "https://www.amazon.it/dp/B0REALV001",
+    section: section.name,
+    section_url: section.url,
+    estimated_value_eur: null,
+    vine_recommendation_id: "APJ#B0REALV001#vine.enrollment.test",
+    vine_card_asin: "B0REALV001",
+    vine_recommendation_type: "SEARCH",
+    raw_text: ""
+  };
+  const sentProducts = [];
+  const editedProducts = [];
+  const scanner = {
+    config,
+    async scanSection() {
+      return [product];
+    },
+    async enrichProductValue(valueProduct) {
+      return { ...valueProduct, estimated_value_eur: 64.99 };
+    }
+  };
+  const telegram = {
+    async sendProduct(sentProduct) {
+      sentProducts.push(sentProduct);
+      return { kind: "photo", chatId: 123, messageId: 456 };
+    },
+    async editProductNotification(sentMessage, editedProduct) {
+      editedProducts.push({ sentMessage, editedProduct });
+      return true;
+    }
+  };
+
+  const summary = await runCycle({ scanner, storage, telegram, config, logger: silentLogger });
+  const row = storage.searchProducts("real storage", 1)[0];
+  assert.equal(summary.notified, 1);
+  assert.equal(sentProducts[0].value_lookup_pending, true);
+  assert.equal(editedProducts.length, 1);
+  assert.equal(editedProducts[0].editedProduct.estimated_value_eur, 64.99);
+  assert.equal(row.vine_recommendation_id, product.vine_recommendation_id);
+  assert.equal(row.estimated_value_eur, 64.99);
+  assert.equal(row.value_lookup_attempts, 1);
+  assert.equal(row.value_lookup_status, "found");
+  assert.equal(row.telegram_message_id, 456);
+
+  storage.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+async function testRunCycleRetriesDeferredValueLookup() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vine-watcher-value-retry-"));
+  const storage = new ProductStorage(path.join(dir, "products.sqlite"), silentLogger);
+  storage.init();
+  const section = { name: "Additional items", url: "https://www.amazon.it/vine/vine-items?queue=encore" };
+  const config = loadConfig({
+    sections: [section],
+    notifyAllProducts: false,
+    notifyAllProductsWindow: "",
+    minScoreToNotify: 999,
+    minValueToNotifyEur: 35,
+    maxNotificationsPerCycle: 5,
+    detailValueLookupEnabled: true,
+    detailValueLookupMaxPerCycle: 1,
+    detailValueLookupRetryBaseMs: 5000,
+    detailValueLookupRetryMaxMs: 60000,
+    sectionDelayMs: 0
+  });
+  const product = {
+    asin: "B0RETRY001",
+    title: "Deferred value lookup product",
+    normalized_title: "deferred value lookup product",
+    url: "https://www.amazon.it/dp/B0RETRY001",
+    section: section.name,
+    section_url: section.url,
+    estimated_value_eur: null,
+    vine_recommendation_id: "APJ#B0RETRY001#vine.enrollment.test",
+    raw_text: ""
+  };
+  let lookupCalls = 0;
+  let notifications = 0;
+  const scanner = {
+    config,
+    async scanSection() {
+      return [product];
+    },
+    async enrichProductValue(valueProduct) {
+      lookupCalls += 1;
+      return lookupCalls === 1 ? valueProduct : { ...valueProduct, estimated_value_eur: 55 };
+    }
+  };
+  const telegram = {
+    async sendProduct() {
+      notifications += 1;
+      return { kind: "message", chatId: 123, messageId: 789 };
+    }
+  };
+
+  const first = await runCycle({ scanner, storage, telegram, config, logger: silentLogger });
+  assert.equal(first.notified, 0);
+  const firstRow = storage.searchProducts("deferred value", 1)[0];
+  assert.equal(firstRow.value_lookup_attempts, 1);
+  storage.db
+    .prepare("UPDATE products SET value_lookup_next_at = ? WHERE id = ?")
+    .run("2000-01-01T00:00:00.000Z", firstRow.id);
+
+  const second = await runCycle({ scanner, storage, telegram, config, logger: silentLogger });
+  const secondRow = storage.searchProducts("deferred value", 1)[0];
+  assert.equal(second.notified, 1);
+  assert.equal(notifications, 1);
+  assert.equal(lookupCalls, 2);
+  assert.equal(secondRow.estimated_value_eur, 55);
+  assert.equal(secondRow.value_lookup_attempts, 2);
+
+  storage.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+async function testParallelSessionFailureCancelsOtherScans() {
+  const sections = [
+    { name: "Session failure", url: "https://www.amazon.it/vine/vine-items?queue=potluck" },
+    { name: "Slow section", url: "https://www.amazon.it/vine/vine-items?queue=encore" }
+  ];
+  const config = loadConfig({ sections, sectionScanConcurrency: 2, sectionDelayMs: 0 });
+  let releaseSlow = null;
+  let cancelled = false;
+  let slowSettled = false;
+  const scanner = {
+    config,
+    async scanSection(section) {
+      if (section.name === "Session failure") {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        throw new SessionNeedsAttentionError("login required", { kind: "login" });
+      }
+      return new Promise((resolve) => {
+        releaseSlow = () => {
+          slowSettled = true;
+          resolve([]);
+        };
+      });
+    },
+    async cancelActiveScans() {
+      cancelled = true;
+      releaseSlow();
+    }
+  };
+
+  await assert.rejects(
+    runCycle({ scanner, storage: {}, telegram: {}, config, logger: silentLogger }),
+    SessionNeedsAttentionError
+  );
+  assert.equal(cancelled, true);
+  assert.equal(slowSettled, true);
+}
+
+async function testTelegramRetriesTransientFailures() {
+  const originalFetch = global.fetch;
+  let calls = 0;
+  global.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return {
+        ok: false,
+        status: 500,
+        statusText: "Server Error",
+        async json() {
+          return { ok: false, description: "temporary" };
+        }
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      async json() {
+        return { ok: true, result: { message_id: 1 } };
+      }
+    };
+  };
+
+  try {
+    const telegram = new TelegramClient(
+      loadConfig({ telegramBotToken: "123456:test-token", telegramChatId: "123", telegramRequestRetries: 1 }),
+      silentLogger
+    );
+    const result = await telegram.request("sendMessage", { chat_id: "123", text: "test" });
+    assert.equal(result.message_id, 1);
+    assert.equal(calls, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testHealthServerFreshnessAndAuth() {
+  const status = {
+    startedAt: Date.now(),
+    lastSuccessfulCycleAt: Date.now(),
+    lastCycle: { success: true, scanned: 2, newProducts: 1, notified: 0 }
+  };
+  const storage = {
+    getStats() {
+      return { totals: { total: 2 }, scanCycles: { total: 1, failed: 0 } };
+    },
+    recentScanCycles() {
+      return [];
+    },
+    recentProducts() {
+      return [];
+    }
+  };
+  const server = startHealthServer({
+    config: {
+      healthServerEnabled: true,
+      healthServerHost: "127.0.0.1",
+      healthServerPort: 0,
+      healthServerToken: "health-token",
+      healthStaleAfterMs: 30000
+    },
+    storage,
+    getStatus: () => status,
+    logger: silentLogger,
+    version: "test"
+  });
+  await once(server, "listening");
+  const port = server.address().port;
+
+  async function request(headers = {}) {
+    return new Promise((resolve, reject) => {
+      const call = http.get({ host: "127.0.0.1", port, path: "/health", headers }, (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          body += chunk;
+        });
+        response.on("end", () => resolve({ statusCode: response.statusCode, body: JSON.parse(body) }));
+      });
+      call.on("error", reject);
+    });
+  }
+
+  const unauthorized = await request();
+  assert.equal(unauthorized.statusCode, 401);
+  const healthy = await request({ Authorization: "Bearer health-token" });
+  assert.equal(healthy.statusCode, 200);
+  assert.equal(healthy.body.ok, true);
+
+  status.lastSuccessfulCycleAt = Date.now() - 60000;
+  const stale = await request({ Authorization: "Bearer health-token" });
+  assert.equal(stale.statusCode, 503);
+  assert.equal(stale.body.ok, false);
+
+  await new Promise((resolve) => server.close(resolve));
+}
+
 function testScannerTurboOnlyDuringAdaptiveActive() {
   const config = loadConfig({
     adaptiveScanEnabled: true,
@@ -1542,9 +1948,12 @@ async function main() {
   testScoringAndTriggers();
   testNotifyAllProductWindow();
   testRuntimeSettings();
+  testConfigValidation();
   testExternalScoringRules();
   testScannerFixtures();
   await testScannerDetailValueLookup();
+  await testScannerRejectsHttpFailureAndRetries();
+  testMemoryRecycleThresholdUsesGrowth();
   testStorageEstimatedValue();
   await testTelegramControlCommands();
   testTelegramFormatting();
@@ -1556,6 +1965,11 @@ async function main() {
   await testRunCycleContinuesAfterSectionFailure();
   await testRunCycleUsesDetailValueBeforeMinValueTrigger();
   await testRunCycleUpdatesNotificationAfterDetailValueLookup();
+  await testRunCyclePersistsValuePipeline();
+  await testRunCycleRetriesDeferredValueLookup();
+  await testParallelSessionFailureCancelsOtherScans();
+  await testTelegramRetriesTransientFailures();
+  await testHealthServerFreshnessAndAuth();
   testScannerTurboOnlyDuringAdaptiveActive();
   await testScannerHardTimeoutClosesStuckPage();
   await testScannerReusesSectionPages();

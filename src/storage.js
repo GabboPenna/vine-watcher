@@ -5,6 +5,7 @@ const Database = require("better-sqlite3");
 const {
   ensureDirForFile,
   escapeCsv,
+  identityKey,
   normalizeTitle,
   nowIso,
   truncate
@@ -38,10 +39,13 @@ class ProductStorage {
     ensureDirForFile(this.databasePath);
     this.db = new Database(this.databasePath);
     this.db.pragma("journal_mode = WAL");
+    this.db.pragma("synchronous = NORMAL");
+    this.db.pragma("busy_timeout = 5000");
     this.db.pragma("foreign_keys = ON");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        identity_key TEXT,
         asin TEXT,
         title TEXT NOT NULL,
         normalized_title TEXT,
@@ -66,7 +70,17 @@ class ProductStorage {
         last_triggers_json TEXT NOT NULL DEFAULT '[]',
         last_blockers_json TEXT NOT NULL DEFAULT '[]',
         last_config_json TEXT NOT NULL DEFAULT '{}',
-        last_decision TEXT NOT NULL DEFAULT ''
+        last_decision TEXT NOT NULL DEFAULT '',
+        vine_recommendation_id TEXT,
+        vine_card_asin TEXT,
+        vine_recommendation_type TEXT,
+        value_lookup_attempts INTEGER NOT NULL DEFAULT 0,
+        value_lookup_last_at TEXT,
+        value_lookup_next_at TEXT,
+        value_lookup_status TEXT NOT NULL DEFAULT '',
+        telegram_chat_id TEXT,
+        telegram_message_id INTEGER,
+        telegram_message_kind TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_products_asin ON products(asin);
@@ -94,7 +108,13 @@ class ProductStorage {
         outcome TEXT NOT NULL DEFAULT '',
         reason_no_notifications TEXT NOT NULL DEFAULT '',
         sections_json TEXT NOT NULL DEFAULT '[]',
-        layout_warnings_json TEXT NOT NULL DEFAULT '[]'
+        layout_warnings_json TEXT NOT NULL DEFAULT '[]',
+        success INTEGER NOT NULL DEFAULT 1,
+        failure_kind TEXT NOT NULL DEFAULT '',
+        error_text TEXT NOT NULL DEFAULT '',
+        disappeared_products INTEGER NOT NULL DEFAULT 0,
+        telegram_failures INTEGER NOT NULL DEFAULT 0,
+        section_failures_json TEXT NOT NULL DEFAULT '[]'
       );
 
       CREATE INDEX IF NOT EXISTS idx_scan_cycles_completed_at ON scan_cycles(completed_at);
@@ -126,17 +146,51 @@ class ProductStorage {
     ensureColumn("products", "last_blockers_json", "TEXT NOT NULL DEFAULT '[]'");
     ensureColumn("products", "last_config_json", "TEXT NOT NULL DEFAULT '{}'");
     ensureColumn("products", "last_decision", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn("products", "identity_key", "TEXT");
+    ensureColumn("products", "vine_recommendation_id", "TEXT");
+    ensureColumn("products", "vine_card_asin", "TEXT");
+    ensureColumn("products", "vine_recommendation_type", "TEXT");
+    ensureColumn("products", "value_lookup_attempts", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn("products", "value_lookup_last_at", "TEXT");
+    ensureColumn("products", "value_lookup_next_at", "TEXT");
+    ensureColumn("products", "value_lookup_status", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn("products", "telegram_chat_id", "TEXT");
+    ensureColumn("products", "telegram_message_id", "INTEGER");
+    ensureColumn("products", "telegram_message_kind", "TEXT");
     ensureColumn("scan_cycles", "layout_warnings_json", "TEXT NOT NULL DEFAULT '[]'");
+    ensureColumn("scan_cycles", "success", "INTEGER NOT NULL DEFAULT 1");
+    ensureColumn("scan_cycles", "failure_kind", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn("scan_cycles", "error_text", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn("scan_cycles", "disappeared_products", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn("scan_cycles", "telegram_failures", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn("scan_cycles", "section_failures_json", "TEXT NOT NULL DEFAULT '[]'");
 
     this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_products_identity_key ON products(identity_key);
       CREATE INDEX IF NOT EXISTS idx_products_present_now ON products(present_now);
       CREATE INDEX IF NOT EXISTS idx_products_disappeared_at ON products(disappeared_at);
+      CREATE INDEX IF NOT EXISTS idx_products_recommendation_id ON products(vine_recommendation_id);
+      CREATE INDEX IF NOT EXISTS idx_products_value_lookup_next ON products(value_lookup_next_at);
+    `);
+
+    this.db.exec(`
+      UPDATE products
+      SET identity_key = CASE
+        WHEN COALESCE(asin, '') != '' THEN 'asin:' || upper(asin)
+        WHEN COALESCE(vine_card_asin, '') != '' THEN 'asin:' || upper(vine_card_asin)
+        WHEN COALESCE(vine_recommendation_id, '') != '' THEN 'recommendation:' || vine_recommendation_id
+        WHEN COALESCE(url, '') != '' THEN 'url:' || url
+        WHEN COALESCE(normalized_title, '') != '' THEN 'title:' || normalized_title
+        ELSE NULL
+      END
+      WHERE COALESCE(identity_key, '') = ''
     `);
   }
 
   prepareStatements() {
     this.insertProduct = this.db.prepare(`
       INSERT INTO products (
+        identity_key,
         asin,
         title,
         normalized_title,
@@ -160,8 +214,12 @@ class ProductStorage {
         last_triggers_json,
         last_blockers_json,
         last_config_json,
-        last_decision
+        last_decision,
+        vine_recommendation_id,
+        vine_card_asin,
+        vine_recommendation_type
       ) VALUES (
+        @identity_key,
         @asin,
         @title,
         @normalized_title,
@@ -185,13 +243,17 @@ class ProductStorage {
         @last_triggers_json,
         @last_blockers_json,
         @last_config_json,
-        @last_decision
+        @last_decision,
+        @vine_recommendation_id,
+        @vine_card_asin,
+        @vine_recommendation_type
       )
     `);
 
     this.updateProduct = this.db.prepare(`
       UPDATE products
       SET
+        identity_key = COALESCE(NULLIF(@identity_key, ''), identity_key),
         asin = COALESCE(NULLIF(@asin, ''), asin),
         title = @title,
         normalized_title = COALESCE(NULLIF(@normalized_title, ''), normalized_title),
@@ -199,7 +261,7 @@ class ProductStorage {
         section_url = COALESCE(NULLIF(@section_url, ''), section_url),
         image_url = COALESCE(NULLIF(@image_url, ''), image_url),
         section = @section,
-        estimated_value_eur = @estimated_value_eur,
+        estimated_value_eur = COALESCE(@estimated_value_eur, estimated_value_eur),
         last_seen_at = @now,
         score = @score,
         reasons_json = @reasons_json,
@@ -213,15 +275,33 @@ class ProductStorage {
         last_triggers_json = @last_triggers_json,
         last_blockers_json = @last_blockers_json,
         last_config_json = @last_config_json,
-        last_decision = @last_decision
+        last_decision = @last_decision,
+        vine_recommendation_id = COALESCE(NULLIF(@vine_recommendation_id, ''), vine_recommendation_id),
+        vine_card_asin = COALESCE(NULLIF(@vine_card_asin, ''), vine_card_asin),
+        vine_recommendation_type = COALESCE(NULLIF(@vine_recommendation_type, ''), vine_recommendation_type)
       WHERE id = @id
     `);
 
     this.markNotifiedStatement = this.db.prepare(`
       UPDATE products
-      SET notified = 1, last_notified_at = ?
-      WHERE id = ?
+      SET notified = 1,
+          last_notified_at = @now,
+          telegram_chat_id = COALESCE(NULLIF(@telegram_chat_id, ''), telegram_chat_id),
+          telegram_message_id = COALESCE(@telegram_message_id, telegram_message_id),
+          telegram_message_kind = COALESCE(NULLIF(@telegram_message_kind, ''), telegram_message_kind)
+      WHERE id = @id
     `);
+
+    this.recordValueLookupStatement = this.db.prepare(`
+      UPDATE products
+      SET value_lookup_attempts = value_lookup_attempts + 1,
+          value_lookup_last_at = @now,
+          value_lookup_next_at = @next_at,
+          value_lookup_status = @status
+      WHERE id = @id
+    `);
+
+    this.findProductByIdStatement = this.db.prepare("SELECT * FROM products WHERE id = ?");
 
     this.getSettingsStatement = this.db.prepare("SELECT key, value FROM settings ORDER BY key");
 
@@ -247,7 +327,13 @@ class ProductStorage {
         outcome,
         reason_no_notifications,
         sections_json,
-        layout_warnings_json
+        layout_warnings_json,
+        success,
+        failure_kind,
+        error_text,
+        disappeared_products,
+        telegram_failures,
+        section_failures_json
       ) VALUES (
         @started_at,
         @completed_at,
@@ -259,43 +345,79 @@ class ProductStorage {
         @outcome,
         @reason_no_notifications,
         @sections_json,
-        @layout_warnings_json
+        @layout_warnings_json,
+        @success,
+        @failure_kind,
+        @error_text,
+        @disappeared_products,
+        @telegram_failures,
+        @section_failures_json
       )
     `);
   }
 
   findExisting(product) {
     const normalizedTitle = product.normalized_title || normalizeTitle(product.title);
-    const clauses = [];
-    const params = {};
+    const asin = String(product.asin || product.vine_card_asin || "").trim().toUpperCase();
+    const recommendationId = String(product.vine_recommendation_id || "").trim();
+    const url = String(product.url || "").trim();
+    const strongIdentity = Boolean(asin || recommendationId || url);
+    const key = identityKey({ ...product, normalized_title: normalizedTitle });
 
-    if (product.asin) {
-      clauses.push("asin = @asin");
-      params.asin = product.asin;
-    }
-    if (product.url) {
-      clauses.push("url = @url");
-      params.url = product.url;
-    }
-    if (normalizedTitle) {
-      clauses.push("normalized_title = @normalized_title");
-      params.normalized_title = normalizedTitle;
+    if (key && !key.startsWith("title:")) {
+      const byIdentity = this.db
+        .prepare("SELECT * FROM products WHERE identity_key = ? ORDER BY id ASC LIMIT 1")
+        .get(key);
+      if (byIdentity) {
+        return byIdentity;
+      }
     }
 
-    if (clauses.length === 0) {
+    if (asin) {
+      const byAsin = this.db
+        .prepare(
+          `SELECT * FROM products
+           WHERE upper(COALESCE(asin, '')) = @asin
+              OR upper(COALESCE(vine_card_asin, '')) = @asin
+           ORDER BY id ASC LIMIT 1`
+        )
+        .get({ asin });
+      if (byAsin) {
+        return byAsin;
+      }
+    }
+
+    if (recommendationId) {
+      const byRecommendation = this.db
+        .prepare("SELECT * FROM products WHERE vine_recommendation_id = ? ORDER BY id ASC LIMIT 1")
+        .get(recommendationId);
+      if (byRecommendation) {
+        return byRecommendation;
+      }
+    }
+
+    if (url) {
+      const byUrl = this.db.prepare("SELECT * FROM products WHERE url = ? ORDER BY id ASC LIMIT 1").get(url);
+      if (byUrl) {
+        return byUrl;
+      }
+    }
+
+    if (strongIdentity || !normalizedTitle) {
       return null;
     }
 
     return this.db
-      .prepare(`SELECT * FROM products WHERE ${clauses.join(" OR ")} ORDER BY id ASC LIMIT 1`)
-      .get(params);
+      .prepare("SELECT * FROM products WHERE normalized_title = ? ORDER BY id ASC LIMIT 1")
+      .get(normalizedTitle);
   }
 
   saveProduct(product, scoring, diagnostics = {}) {
     const now = nowIso();
     const normalizedTitle = product.normalized_title || normalizeTitle(product.title);
     const payload = {
-      asin: product.asin || "",
+      identity_key: identityKey({ ...product, normalized_title: normalizedTitle }),
+      asin: String(product.asin || "").trim().toUpperCase(),
       title: truncate(product.title || "Untitled product", 1000),
       normalized_title: normalizedTitle,
       url: product.url || "",
@@ -311,7 +433,10 @@ class ProductStorage {
       last_triggers_json: jsonText(diagnostics.triggers || []),
       last_blockers_json: jsonText(diagnostics.blockers || []),
       last_config_json: jsonText(diagnostics.configSnapshot || {}, {}),
-      last_decision: String(diagnostics.decision || "")
+      last_decision: String(diagnostics.decision || ""),
+      vine_recommendation_id: String(product.vine_recommendation_id || "").trim(),
+      vine_card_asin: String(product.vine_card_asin || "").trim().toUpperCase(),
+      vine_recommendation_type: String(product.vine_recommendation_type || "").trim()
     };
 
     const existing = this.findExisting(payload);
@@ -319,53 +444,36 @@ class ProductStorage {
       this.updateProduct.run({ ...payload, id: existing.id });
       return {
         isNew: false,
-        product: {
-          ...existing,
-          ...payload,
-          id: existing.id,
-          first_seen_at: existing.first_seen_at,
-          last_seen_at: now,
-          notified: existing.notified,
-          present_now: 1,
-          last_inventory_at: payload.inventory_at,
-          disappeared_at: existing.present_now === 0 ? null : existing.disappeared_at,
-          reappeared_count:
-            existing.present_now === 0 ? Number(existing.reappeared_count || 0) + 1 : Number(existing.reappeared_count || 0),
-          first_score: existing.first_score === null || existing.first_score === undefined ? payload.score : existing.first_score,
-          first_reasons_json: existing.first_reasons_json || payload.reasons_json,
-          last_triggers_json: payload.last_triggers_json,
-          last_blockers_json: payload.last_blockers_json,
-          last_config_json: payload.last_config_json,
-          last_decision: payload.last_decision
-        }
+        product: this.findProductByIdStatement.get(existing.id)
       };
     }
 
     const info = this.insertProduct.run(payload);
     return {
       isNew: true,
-      product: {
-        id: info.lastInsertRowid,
-        ...payload,
-        first_seen_at: now,
-        last_seen_at: now,
-        notified: 0,
-        present_now: 1,
-        last_inventory_at: payload.inventory_at,
-        disappeared_at: null,
-        reappeared_count: 0,
-        first_score: payload.score,
-        first_reasons_json: payload.reasons_json,
-        last_triggers_json: payload.last_triggers_json,
-        last_blockers_json: payload.last_blockers_json,
-        last_config_json: payload.last_config_json,
-        last_decision: payload.last_decision
-      }
+      product: this.findProductByIdStatement.get(info.lastInsertRowid)
     };
   }
 
-  markNotified(productId) {
-    this.markNotifiedStatement.run(nowIso(), productId);
+  markNotified(productId, sentMessage = {}) {
+    this.markNotifiedStatement.run({
+      id: productId,
+      now: nowIso(),
+      telegram_chat_id: sentMessage.chatId === undefined ? "" : String(sentMessage.chatId),
+      telegram_message_id: Number.isInteger(Number(sentMessage.messageId)) ? Number(sentMessage.messageId) : null,
+      telegram_message_kind: String(sentMessage.kind || "")
+    });
+    return this.findProductByIdStatement.get(productId);
+  }
+
+  recordValueLookupAttempt(productId, { found = false, nextAt = null, error = false } = {}) {
+    this.recordValueLookupStatement.run({
+      id: productId,
+      now: nowIso(),
+      next_at: found ? null : nextAt,
+      status: found ? "found" : error ? "error" : "missing"
+    });
+    return this.findProductByIdStatement.get(productId);
   }
 
   markMissingProducts(inventoryAt, sectionNames = null) {
@@ -437,7 +545,13 @@ class ProductStorage {
       outcome: String(summary.outcome || ""),
       reason_no_notifications: String(summary.reasonNoNotifications || ""),
       sections_json: JSON.stringify(summary.sections || []),
-      layout_warnings_json: JSON.stringify(summary.layoutWarnings || [])
+      layout_warnings_json: JSON.stringify(summary.layoutWarnings || []),
+      success: summary.success === false ? 0 : 1,
+      failure_kind: String(summary.failureKind || ""),
+      error_text: truncate(summary.error || "", 4000),
+      disappeared_products: Number(summary.disappearedProducts || 0),
+      telegram_failures: Number(summary.telegramFailures || 0),
+      section_failures_json: JSON.stringify(summary.sectionFailures || [])
     });
   }
 
@@ -445,7 +559,8 @@ class ProductStorage {
     return this.db
       .prepare(
         `SELECT id, started_at, completed_at, scanned, new_products, notified, max_score,
-                duration_seconds, outcome, reason_no_notifications, sections_json, layout_warnings_json
+                duration_seconds, outcome, reason_no_notifications, sections_json, layout_warnings_json,
+                success, failure_kind, error_text, disappeared_products, telegram_failures, section_failures_json
          FROM scan_cycles
          ORDER BY completed_at DESC
          LIMIT ?`
@@ -462,11 +577,14 @@ class ProductStorage {
     const like = `%${term}%`;
     return this.db
       .prepare(
-        `SELECT id, asin, title, normalized_title, url, section_url, image_url, section, estimated_value_eur,
+        `SELECT id, identity_key, asin, title, normalized_title, url, section_url, image_url, section, estimated_value_eur,
                 first_seen_at, last_seen_at, score, reasons_json, notified, raw_text,
                 present_now, disappeared_at, reappeared_count, last_notified_at,
                 first_score, first_reasons_json, last_triggers_json, last_blockers_json,
-                last_config_json, last_decision
+                last_config_json, last_decision, vine_recommendation_id, vine_card_asin,
+                vine_recommendation_type, value_lookup_attempts, value_lookup_last_at,
+                value_lookup_next_at, value_lookup_status, telegram_chat_id, telegram_message_id,
+                telegram_message_kind
          FROM products
          WHERE lower(title) LIKE @like
             OR lower(normalized_title) LIKE @like
@@ -504,11 +622,14 @@ class ProductStorage {
 
     return this.db
       .prepare(
-        `SELECT id, asin, title, normalized_title, url, section_url, image_url, section, estimated_value_eur,
+        `SELECT id, identity_key, asin, title, normalized_title, url, section_url, image_url, section, estimated_value_eur,
                 first_seen_at, last_seen_at, score, reasons_json, notified, raw_text,
                 present_now, disappeared_at, reappeared_count, last_notified_at,
                 first_score, first_reasons_json, last_triggers_json, last_blockers_json,
-                last_config_json, last_decision
+                last_config_json, last_decision, vine_recommendation_id, vine_card_asin,
+                vine_recommendation_type, value_lookup_attempts, value_lookup_last_at,
+                value_lookup_next_at, value_lookup_status, telegram_chat_id, telegram_message_id,
+                telegram_message_kind
          FROM products
          ${where}
          ${order}
@@ -526,6 +647,8 @@ class ProductStorage {
           SUM(CASE WHEN present_now = 1 THEN 1 ELSE 0 END) AS present,
           SUM(CASE WHEN present_now = 0 THEN 1 ELSE 0 END) AS gone,
           SUM(CASE WHEN reappeared_count > 0 THEN 1 ELSE 0 END) AS reappeared,
+          SUM(CASE WHEN estimated_value_eur IS NULL AND COALESCE(vine_recommendation_id, '') != '' THEN 1 ELSE 0 END)
+            AS value_lookup_pending,
           MAX(score) AS max_score,
           AVG(score) AS avg_score,
           MAX(estimated_value_eur) AS max_estimated_value_eur
@@ -553,19 +676,32 @@ class ProductStorage {
       )
       .all();
 
+    const scanCycles = this.db
+      .prepare(
+        `SELECT COUNT(*) AS total,
+                SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failed,
+                MAX(completed_at) AS last_completed_at
+         FROM scan_cycles`
+      )
+      .get();
+
     return {
       totals,
       bySection,
-      topProducts
+      topProducts,
+      scanCycles
     };
   }
 
   exportCsv(outputPath) {
     const rows = this.db
       .prepare(
-        `SELECT id, asin, title, normalized_title, url, section_url, image_url, section, estimated_value_eur,
+        `SELECT id, identity_key, asin, title, normalized_title, url, section_url, image_url, section, estimated_value_eur,
                 first_seen_at, last_seen_at, score, reasons_json, notified, present_now, disappeared_at,
-                reappeared_count, last_notified_at, last_decision, last_triggers_json, last_blockers_json
+                reappeared_count, last_notified_at, last_decision, last_triggers_json, last_blockers_json,
+                vine_recommendation_id, vine_card_asin, vine_recommendation_type,
+                value_lookup_attempts, value_lookup_last_at, value_lookup_next_at, value_lookup_status,
+                telegram_chat_id, telegram_message_id, telegram_message_kind
          FROM products
          ORDER BY first_seen_at DESC`
       )
@@ -574,6 +710,7 @@ class ProductStorage {
     ensureDirForFile(outputPath);
     const headers = [
       "id",
+      "identity_key",
       "asin",
       "title",
       "normalized_title",
@@ -593,7 +730,17 @@ class ProductStorage {
       "last_notified_at",
       "last_decision",
       "last_triggers_json",
-      "last_blockers_json"
+      "last_blockers_json",
+      "vine_recommendation_id",
+      "vine_card_asin",
+      "vine_recommendation_type",
+      "value_lookup_attempts",
+      "value_lookup_last_at",
+      "value_lookup_next_at",
+      "value_lookup_status",
+      "telegram_chat_id",
+      "telegram_message_id",
+      "telegram_message_kind"
     ];
     const lines = [
       headers.join(","),

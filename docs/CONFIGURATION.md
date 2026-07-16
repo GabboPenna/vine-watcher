@@ -16,6 +16,8 @@ TELEGRAM_CHAT_ID=123456789
 TELEGRAM_CONTROL_ENABLED=false
 TELEGRAM_CONTROL_POLL_SECONDS=3
 TELEGRAM_CONTROL_LANGUAGE=en
+TELEGRAM_REQUEST_TIMEOUT_SECONDS=15
+TELEGRAM_REQUEST_RETRIES=2
 ```
 
 Create a bot with BotFather, send it at least one message, then fetch updates:
@@ -151,14 +153,19 @@ WAIT_FOR_NETWORK_IDLE=false
 PRODUCT_READY_TIMEOUT_SECONDS=5
 PAGE_SETTLE_SECONDS=1
 SECTION_DELAY_SECONDS=1
+SECTION_NAVIGATION_RETRIES=1
+SECTION_NAVIGATION_RETRY_DELAY_SECONDS=2
 SECTION_SCAN_CONCURRENCY=1
 REUSE_SECTION_PAGES=false
 DETAIL_VALUE_LOOKUP_ENABLED=true
 DETAIL_VALUE_LOOKUP_MAX_PER_CYCLE=10
 DETAIL_VALUE_LOOKUP_TIMEOUT_SECONDS=4
+DETAIL_VALUE_LOOKUP_RETRY_BASE_SECONDS=60
+DETAIL_VALUE_LOOKUP_RETRY_MAX_SECONDS=3600
 SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE=false
 BROWSER_RESTART_INTERVAL_MINUTES=180
 BROWSER_MEMORY_RECYCLE_MB=0
+BROWSER_MEMORY_RECYCLE_MIN_GROWTH_MB=256
 BROWSER_MEMORY_RECYCLE_COOLDOWN_MINUTES=10
 BLOCK_RESOURCE_TYPES=font,media
 LAYOUT_HEALTH_MIN_PRODUCTS=0
@@ -206,7 +213,7 @@ PRODUCT_READY_TIMEOUT_SECONDS=2
 
 `REUSE_SECTION_PAGES=true` keeps a dedicated Chromium page open for each section and navigates it again on the next cycle instead of creating and closing a new page every time. If a reused page errors, Vine Watcher discards it and creates a fresh one on the next scan.
 
-`DETAIL_VALUE_LOOKUP_ENABLED=true` lets Vine Watcher perform a short read-only Vine detail lookup when a product card does not expose the estimated value. This reads the Vine detail `taxValue` field, stores it as `estimated_value_eur`, and lets `MIN_VALUE_TO_NOTIFY_EUR` work from the same value Amazon shows as `Valore fiscale stimato`. Lookups are limited by `DETAIL_VALUE_LOOKUP_MAX_PER_CYCLE` and `DETAIL_VALUE_LOOKUP_TIMEOUT_SECONDS` so a busy drop does not turn into an unbounded detail crawl.
+`DETAIL_VALUE_LOOKUP_ENABLED=true` lets Vine Watcher perform a short read-only Vine detail lookup when a product card does not expose the estimated value. This reads the Vine detail `taxValue` field, stores it as `estimated_value_eur`, and lets `MIN_VALUE_TO_NOTIFY_EUR` work from the same value Amazon shows as `Valore fiscale stimato`. Lookups are limited per cycle and persisted as a retry queue. Failed or deferred lookups are retried with exponential backoff between `DETAIL_VALUE_LOOKUP_RETRY_BASE_SECONDS` and `DETAIL_VALUE_LOOKUP_RETRY_MAX_SECONDS`; they are not forgotten after the first scan.
 
 If a product already matches score, strict, or notify-all rules, Vine Watcher sends the Telegram notification immediately. When the value lookup finishes afterward, it edits the same Telegram message or caption with the recovered value. If the product would only be notified because it crosses `MIN_VALUE_TO_NOTIFY_EUR`, the lookup must happen before notification because the value is the trigger.
 
@@ -237,7 +244,9 @@ Panic mode still wins over adaptive scanning. Use adaptive scanning for daily un
 
 `BROWSER_RESTART_INTERVAL_MINUTES` closes and reopens the Chromium context periodically while keeping the persistent browser profile. This helps long-running small hosts release Chromium memory before it grows into an OOM condition. Set it to `0` to disable automatic browser recycling.
 
-`BROWSER_MEMORY_RECYCLE_MB` is an optional Linux process-tree RSS guard. When set above `0`, Vine Watcher sums the Node/Chromium process tree memory and recycles Chromium if it crosses the configured MB threshold. `BROWSER_MEMORY_RECYCLE_COOLDOWN_MINUTES` prevents repeated recycle loops.
+`BROWSER_MEMORY_RECYCLE_MB` is an optional Linux process-tree RSS guard. The effective threshold is the greater of that absolute value and the post-start browser baseline plus `BROWSER_MEMORY_RECYCLE_MIN_GROWTH_MB`. This prevents a healthy but large Chromium baseline from causing one recycle every cooldown. Recycling happens immediately before the next scan, and transient navigation retry protects the first cold navigation.
+
+`SECTION_NAVIGATION_RETRIES` retries only transient section failures such as navigation timeout, `net::ERR_*`, HTTP 429/5xx, or an untrustworthy empty page. A confirmed empty Vine inventory remains a successful scan.
 
 Layout health warnings are diagnostic only. If a complete cycle keeps finding very few products, the cycle summary stores a warning so you can tell whether Amazon layout/session behavior may need review.
 
@@ -305,7 +314,7 @@ positiveKeywordsHigh:
   - garage sensor
 ```
 
-The supported keys are the same keyword arrays used by the scorer, such as `positiveKeywordsHigh`, `brandKeywords`, `smartHomeKeywords`, `homeApplianceKeywords`, `negativeKeywords`, and `nicheReplacementKeywords`.
+The supported keys are the same keyword arrays used by the scorer, such as `positiveKeywordsHigh`, `knownBrandsBonus`, `smartHomeKeywords`, `homeApplianceKeywords`, `negativeKeywords`, and `nicheReplacementKeywords`.
 
 ## Session Health
 
@@ -348,14 +357,17 @@ SQLITE_VACUUM_INTERVAL_HOURS=24
 
 The Chromium profile is local runtime state. Do not commit it.
 
-The database stores product history plus current inventory state:
+The database stores product history plus current inventory state. Schema upgrades are automatic and preserve existing rows:
 
 - `present_now=1`: seen in the latest complete inventory cycle
 - `present_now=0`: previously seen but not present anymore
 - `reappeared_count`: how many times a gone product came back
 - `last_triggers_json`, `last_blockers_json`, `last_config_json`, `last_decision`: diagnostic snapshot from the latest scan
+- `identity_key` and Vine recommendation fields: strong identity without title-based collisions
+- `value_lookup_*`: durable value lookup retry state
+- `telegram_*`: message handle used for deferred caption/message updates
 
-Retention only deletes old gone products when `RETENTION_PRODUCTS_DAYS` is greater than `0`. Scan-cycle history is kept for `RETENTION_SCAN_CYCLES_DAYS`, default 30 days. SQLite vacuum runs on the configured maintenance interval.
+Retention only deletes old gone products when `RETENTION_PRODUCTS_DAYS` is greater than `0`. Scan-cycle history is kept for `RETENTION_SCAN_CYCLES_DAYS`, default 30 days. Checkpoint, optimization, retention, and vacuum run in a separate process after the configured interval, so the Node event loop remains responsive.
 
 ## Health API
 
@@ -366,6 +378,7 @@ HEALTH_SERVER_ENABLED=false
 HEALTH_SERVER_HOST=127.0.0.1
 HEALTH_SERVER_PORT=8765
 HEALTH_SERVER_TOKEN=
+HEALTH_STALE_AFTER_SECONDS=300
 ```
 
 When `HEALTH_SERVER_TOKEN` is set, use either:
@@ -383,7 +396,7 @@ curl "http://127.0.0.1:8765/health?token=change-me"
 Endpoints:
 
 ```text
-/health                         JSON health, last cycle, memory, and totals
+/health                         JSON health, last successful cycle age, memory, and totals; returns 503 when stale
 /metrics                        Prometheus-style text metrics
 /last-cycle                     latest cycle plus recent scan-cycle history
 /latest-products?mode=present   recent products; modes include all, present, gone, notified, unnotified, top

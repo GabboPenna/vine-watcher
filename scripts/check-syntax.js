@@ -1,20 +1,15 @@
 "use strict";
 
-const { execFileSync, spawnSync } = require("node:child_process");
-
-function gitFiles(pathspec) {
-  const output = execFileSync("git", ["ls-files", pathspec], {
-    encoding: "utf8"
-  });
-  return output.split(/\r?\n/).filter(Boolean);
-}
+const { spawnSync } = require("node:child_process");
+const { filesWithExtension, projectRoot } = require("./check-files");
 
 function main() {
-  const files = gitFiles("*.js");
+  const files = filesWithExtension(".js");
   let failed = false;
 
   for (const file of files) {
     const result = spawnSync(process.execPath, ["--check", file], {
+      cwd: projectRoot,
       encoding: "utf8",
       stdio: "pipe"
     });

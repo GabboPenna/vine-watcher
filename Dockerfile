@@ -1,5 +1,17 @@
 # syntax=docker/dockerfile:1
 
+FROM node:22-bookworm-slim AS dependencies
+
+WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends g++ make python3 \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --loglevel=error \
+  && rm -rf /root/.npm
+
 FROM node:22-bookworm-slim
 
 LABEL org.opencontainers.image.title="Vine Watcher"
@@ -21,21 +33,18 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
     dumb-init \
-    g++ \
-    make \
     novnc \
     openbox \
     openssl \
-    python3 \
     websockify \
     xauth \
     x11vnc \
     xvfb \
   && rm -rf /var/lib/apt/lists/*
 
+COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --loglevel=error \
-  && npx playwright install --with-deps chromium \
+RUN npx playwright install --with-deps chromium \
   && rm -rf /root/.npm \
   && mkdir -p /data /ms-playwright \
   && chown -R node:node /app /data /ms-playwright

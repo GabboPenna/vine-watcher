@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
+const { parseTimeWindow } = require("./time-window");
 const { safeJsonParse } = require("./utils");
 
 dotenv.config({ quiet: true });
@@ -562,7 +563,14 @@ function parseBool(value, fallback) {
   if (value === undefined || value === null || value === "") {
     return fallback;
   }
-  return ["1", "true", "yes", "y", "on"].includes(String(value).trim().toLowerCase());
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "n", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`Invalid boolean value: ${value}`);
 }
 
 function parseNumber(value, fallback, min = undefined) {
@@ -789,6 +797,74 @@ function loadSections(baseUrl) {
   return sections.filter((section) => section.enabled);
 }
 
+function validateConfig(config) {
+  const errors = [];
+  if (!Array.isArray(config.sections) || config.sections.length === 0) {
+    errors.push("At least one enabled Vine section is required");
+  }
+
+  const sectionNames = new Set();
+  const sectionUrls = new Set();
+  for (const section of config.sections || []) {
+    const nameKey = String(section.name || "").trim().toLowerCase();
+    if (!nameKey) {
+      errors.push("Every Vine section needs a name");
+    } else if (sectionNames.has(nameKey)) {
+      errors.push(`Duplicate Vine section name: ${section.name}`);
+    }
+    sectionNames.add(nameKey);
+
+    try {
+      const parsed = new URL(section.url);
+      if (!/^https?:$/.test(parsed.protocol)) {
+        errors.push(`Unsupported section URL protocol: ${section.url}`);
+      }
+      const urlKey = parsed.toString();
+      if (sectionUrls.has(urlKey)) {
+        errors.push(`Duplicate Vine section URL: ${section.url}`);
+      }
+      sectionUrls.add(urlKey);
+    } catch (_error) {
+      errors.push(`Invalid Vine section URL: ${section.url}`);
+    }
+  }
+
+  if (config.notifyAllProductsWindow && !parseTimeWindow(config.notifyAllProductsWindow)) {
+    errors.push(`Invalid NOTIFY_ALL_PRODUCTS_WINDOW: ${config.notifyAllProductsWindow}`);
+  }
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: config.timezoneId }).format();
+  } catch (_error) {
+    errors.push(`Invalid TZ timezone: ${config.timezoneId}`);
+  }
+  if (config.telegramControlEnabled && (!config.telegramBotToken || !config.telegramChatId)) {
+    errors.push("Telegram control requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID");
+  }
+  if (!Number.isInteger(config.sectionScanConcurrency) || config.sectionScanConcurrency < 1 || config.sectionScanConcurrency > 4) {
+    errors.push("SECTION_SCAN_CONCURRENCY must be an integer between 1 and 4");
+  }
+  if (!Number.isInteger(config.sectionNavigationRetries) || config.sectionNavigationRetries < 0 || config.sectionNavigationRetries > 5) {
+    errors.push("SECTION_NAVIGATION_RETRIES must be an integer between 0 and 5");
+  }
+  if (config.detailValueLookupRetryMaxMs < config.detailValueLookupRetryBaseMs) {
+    errors.push("DETAIL_VALUE_LOOKUP_RETRY_MAX_SECONDS must be >= DETAIL_VALUE_LOOKUP_RETRY_BASE_SECONDS");
+  }
+  if (!Number.isInteger(config.telegramRequestRetries) || config.telegramRequestRetries < 0 || config.telegramRequestRetries > 5) {
+    errors.push("TELEGRAM_REQUEST_RETRIES must be an integer between 0 and 5");
+  }
+  if (!Number.isInteger(config.healthServerPort) || config.healthServerPort < 1 || config.healthServerPort > 65535) {
+    errors.push("HEALTH_SERVER_PORT must be an integer between 1 and 65535");
+  }
+  if (!new Set(["trace", "debug", "info", "warn", "error"]).has(String(config.logLevel).toLowerCase())) {
+    errors.push(`Invalid LOG_LEVEL: ${config.logLevel}`);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Invalid Vine Watcher configuration:\n- ${errors.join("\n- ")}`);
+  }
+  return config;
+}
+
 function loadConfig(overrides = {}) {
   const amazonVineBaseUrl = readEnv("AMAZON_VINE_BASE_URL", "https://www.amazon.it/vine/vine-items");
   const panicWindowMinutes = parseNumber(readEnv("PANIC_WINDOW_MINUTES", "0"), 0, 0);
@@ -801,13 +877,16 @@ function loadConfig(overrides = {}) {
   const externalRules = loadExternalRules(scoringRulesPath, scoringRulesJson);
   const keywords = mergeKeywordConfig(keywordConfig, externalRules);
 
-  return {
+  const config = {
     projectRoot,
     telegramBotToken: readEnv("TELEGRAM_BOT_TOKEN", ""),
     telegramChatId: readEnv("TELEGRAM_CHAT_ID", ""),
     telegramControlEnabled: parseBool(readEnv("TELEGRAM_CONTROL_ENABLED", "false"), false),
     telegramControlPollSeconds: parseNumber(readEnv("TELEGRAM_CONTROL_POLL_SECONDS", "3"), 3, 1),
     telegramControlLanguage: readEnv("TELEGRAM_CONTROL_LANGUAGE", "en"),
+    telegramRequestTimeoutMs:
+      parseNumber(readEnv("TELEGRAM_REQUEST_TIMEOUT_SECONDS", "15"), 15, 5) * 1000,
+    telegramRequestRetries: parseNumber(readEnv("TELEGRAM_REQUEST_RETRIES", "2"), 2, 0),
     amazonVineBaseUrl,
     sections: loadSections(amazonVineBaseUrl),
     scanIntervalSeconds: parseNumber(readEnv("SCAN_INTERVAL_SECONDS", "30"), 30, 10),
@@ -838,12 +917,19 @@ function loadConfig(overrides = {}) {
     productReadyTimeoutMs: parseNumber(readEnv("PRODUCT_READY_TIMEOUT_SECONDS", "5"), 5, 1) * 1000,
     pageSettleMs: parseNumber(readEnv("PAGE_SETTLE_SECONDS", "1"), 1, 0) * 1000,
     sectionDelayMs: parseNumber(readEnv("SECTION_DELAY_SECONDS", "1"), 1, 0) * 1000,
+    sectionNavigationRetries: parseNumber(readEnv("SECTION_NAVIGATION_RETRIES", "1"), 1, 0),
+    sectionNavigationRetryDelayMs:
+      parseNumber(readEnv("SECTION_NAVIGATION_RETRY_DELAY_SECONDS", "2"), 2, 0) * 1000,
     sectionScanConcurrency: parseNumber(readEnv("SECTION_SCAN_CONCURRENCY", "1"), 1, 1),
     reuseSectionPages: parseBool(readEnv("REUSE_SECTION_PAGES", "false"), false),
     detailValueLookupEnabled: parseBool(readEnv("DETAIL_VALUE_LOOKUP_ENABLED", "true"), true),
     detailValueLookupMaxPerCycle: parseNumber(readEnv("DETAIL_VALUE_LOOKUP_MAX_PER_CYCLE", "10"), 10, 0),
     detailValueLookupTimeoutMs:
       parseNumber(readEnv("DETAIL_VALUE_LOOKUP_TIMEOUT_SECONDS", "4"), 4, 1) * 1000,
+    detailValueLookupRetryBaseMs:
+      parseNumber(readEnv("DETAIL_VALUE_LOOKUP_RETRY_BASE_SECONDS", "60"), 60, 5) * 1000,
+    detailValueLookupRetryMaxMs:
+      parseNumber(readEnv("DETAIL_VALUE_LOOKUP_RETRY_MAX_SECONDS", "3600"), 3600, 30) * 1000,
     scannerTurboOnlyDuringAdaptiveActive: parseBool(
       readEnv("SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE", "false"),
       false
@@ -851,6 +937,11 @@ function loadConfig(overrides = {}) {
     browserRestartIntervalMs:
       parseNumber(readEnv("BROWSER_RESTART_INTERVAL_MINUTES", "180"), 180, 0) * 60 * 1000,
     browserMemoryRecycleMb: parseNumber(readEnv("BROWSER_MEMORY_RECYCLE_MB", "0"), 0, 0),
+    browserMemoryRecycleMinGrowthMb: parseNumber(
+      readEnv("BROWSER_MEMORY_RECYCLE_MIN_GROWTH_MB", "256"),
+      256,
+      0
+    ),
     browserMemoryRecycleCooldownMs:
       parseNumber(readEnv("BROWSER_MEMORY_RECYCLE_COOLDOWN_MINUTES", "10"), 10, 1) * 60 * 1000,
     blockedResourceTypes: parseList(readEnv("BLOCK_RESOURCE_TYPES", "font,media"), ["font", "media"]),
@@ -884,15 +975,18 @@ function loadConfig(overrides = {}) {
     healthServerHost: readEnv("HEALTH_SERVER_HOST", "127.0.0.1"),
     healthServerPort: parseNumber(readEnv("HEALTH_SERVER_PORT", "8765"), 8765, 1),
     healthServerToken: readEnv("HEALTH_SERVER_TOKEN", ""),
+    healthStaleAfterMs: parseNumber(readEnv("HEALTH_STALE_AFTER_SECONDS", "300"), 300, 30) * 1000,
     retentionProductsDays: parseNumber(readEnv("RETENTION_PRODUCTS_DAYS", "0"), 0, 0),
     retentionScanCyclesDays: parseNumber(readEnv("RETENTION_SCAN_CYCLES_DAYS", "30"), 30, 0),
     sqliteVacuumIntervalHours: parseNumber(readEnv("SQLITE_VACUUM_INTERVAL_HOURS", "24"), 24, 0),
     timezoneId: readEnv("TZ", "Europe/Rome"),
     ...overrides
   };
+  return validateConfig(config);
 }
 
 module.exports = {
   keywordConfig,
-  loadConfig
+  loadConfig,
+  validateConfig
 };

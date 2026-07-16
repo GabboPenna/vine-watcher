@@ -6,6 +6,36 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.7.0] - 2026-07-15
+
+### Added
+
+- Added strong persisted product identities based on ASIN, Vine recommendation ID, or canonical URL.
+- Added a durable estimated-value retry queue with exponential backoff and persisted Telegram message handles for deferred edits.
+- Added transient section navigation retries, active-scan cancellation, trusted empty-inventory validation, and HTTP 429/5xx handling.
+- Added Telegram request timeouts and bounded retry support, including Telegram `retry_after` handling.
+- Added failed-cycle persistence, failure metrics, last-success freshness health checks, and background SQLite maintenance.
+- Added portable file discovery for validation outside Git checkouts and release metadata validation.
+- Added Docker health checks, resource limits, image SBOM/provenance publishing, and hardened systemd settings.
+
+### Changed
+
+- Distinct ASINs with identical titles no longer collapse into one database row.
+- Vine detail API responses are explicitly disposed after reading to release Playwright response bodies.
+- Browser memory recycling now requires configured absolute pressure or meaningful growth above the measured Chromium baseline.
+- Browser recycling happens after the scan delay, immediately before the next cycle, and no longer runs once per cooldown on a high baseline.
+- SQLite maintenance no longer blocks the watcher event loop or run immediately after every service restart.
+- Debian installation now uses `npm ci`, validates the installed copy, safely stops an existing service, and renders custom install paths/users into systemd.
+- Scanner scheduling and Telegram control profiles were split into focused modules.
+- Docker images now use a build stage so compiler tooling is not retained in the runtime image.
+
+### Fixed
+
+- Fixed post-notification value enrichment losing `vine_recommendation_id` at the SQLite boundary.
+- Fixed value-only matches being permanently skipped when the first lookup failed or exceeded the per-cycle budget.
+- Fixed parallel scans continuing in the background after a session-attention failure.
+- Fixed a successful photo notification being duplicated as text if its optional details message failed.
+
 ## [0.6.4] - 2026-07-09
 
 ### Added

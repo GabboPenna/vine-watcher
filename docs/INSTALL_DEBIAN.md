@@ -10,6 +10,12 @@ cd vine-watcher
 sudo bash scripts/install-debian.sh
 ```
 
+Optional custom locations and service accounts are applied consistently to systemd and the noVNC login helper:
+
+```bash
+sudo INSTALL_DIR=/srv/vine-watcher SERVICE_USER=vinewatcher bash scripts/install-debian.sh
+```
+
 The installer handles:
 
 - required Debian packages
@@ -20,6 +26,8 @@ The installer handles:
 - `.env` creation
 - Telegram test
 - systemd unit installation
+- portable validation before handoff
+- a hardened service unit with writable access limited to runtime data and the service home
 
 The installer never asks for your Amazon password. Amazon login is always manual.
 
@@ -29,14 +37,14 @@ The installer never asks for your Amazon password. Amazon login is always manual
 sudo apt update
 sudo apt install -y ca-certificates curl git sqlite3 nodejs npm build-essential python3 xvfb xauth
 
-sudo useradd --system --create-home --home-dir /var/lib/vinewatcher --shell /usr/sbin/nologin vinewatcher
+sudo useradd --system --user-group --create-home --home-dir /var/lib/vinewatcher --shell /usr/sbin/nologin vinewatcher
 sudo mkdir -p /opt/vine-watcher-telegram
 sudo chown -R vinewatcher:vinewatcher /opt/vine-watcher-telegram /var/lib/vinewatcher
 
 sudo cp -a . /opt/vine-watcher-telegram/
 cd /opt/vine-watcher-telegram
 
-sudo -u vinewatcher npm install --loglevel=error
+sudo -u vinewatcher npm ci --loglevel=error
 sudo npx playwright install-deps chromium
 sudo -u vinewatcher -H npx playwright install chromium
 
@@ -64,6 +72,8 @@ Complete login, 2FA, or verification in Chromium. When Vine is visible and stabl
 ```bash
 sudo /opt/vine-watcher-telegram/scripts/server-login.sh start
 ```
+
+The helper stops `vine-watcher.service` first so two Chromium processes cannot open the same persistent profile.
 
 Open the printed noVNC URL, enter the printed temporary password, and complete Amazon login manually.
 

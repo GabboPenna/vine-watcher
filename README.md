@@ -10,16 +10,17 @@ Vine Watcher monitors the Amazon Vine sections already available to your logged-
 ## What It Does
 
 - Watches configured Amazon Vine queues with Playwright and Chromium.
-- Stores seen products in SQLite to avoid duplicate alerts.
+- Stores products under strong ASIN/recommendation identities in SQLite to avoid both duplicate alerts and title collisions.
 - Tracks current inventory state: present, disappeared, and reappeared products.
 - Scores products with keyword, brand, category, and negative-signal rules.
 - Can load extra scoring keywords from JSON or simple YAML files.
 - Sends compact Telegram notifications with score, estimated Vine value, grouped reasons, ASIN, image when available, and an inline Vine section button.
-- Sends matching notifications immediately when possible, then edits the Telegram message if a later Vine detail lookup finds the estimated value.
+- Sends matching notifications immediately, persists the Telegram message handle, and edits it when the durable Vine-value retry queue finds the estimated value.
 - Can be controlled from Telegram with an optional private command interface.
 - Supports estimated-value alerts from the Vine card or the read-only Vine detail tax value.
 - Stores notification decisions, triggers, blockers, and a safe config snapshot for debugging.
-- Includes dry-run scans, layout-health warnings, SQLite retention, and a local read-only health API.
+- Rejects ambiguous empty/error pages before inventory state is changed and retries transient section navigation failures.
+- Includes dry-run scans, persisted failed-cycle diagnostics, background SQLite maintenance, and a local read-only health API.
 - Can scan sections in parallel and reuse Chromium tabs for lower notification latency.
 - Runs on Debian with systemd or with Docker Compose.
 - Uses a persistent Chromium profile created by manual login.
@@ -171,6 +172,7 @@ HEALTH_SERVER_ENABLED=true
 HEALTH_SERVER_HOST=127.0.0.1
 HEALTH_SERVER_PORT=8765
 HEALTH_SERVER_TOKEN=change-me
+HEALTH_STALE_AFTER_SECONDS=300
 ```
 
 Endpoints:
@@ -204,7 +206,7 @@ npm run login                # local visible Chromium login
 npm run test:telegram        # send Telegram test message
 npm run stats                # show SQLite stats
 npm run export:csv           # export products to CSV
-npm run validate             # syntax, bash, tests, secret hygiene
+npm run validate             # syntax, bash, tests, secrets, release metadata
 npm run docker:up            # start Docker watcher
 npm run docker:login         # start Docker noVNC login helper
 ```
@@ -217,7 +219,7 @@ Published image:
 docker pull gabrielepennacchia/vine-watcher:latest
 ```
 
-Release tags are published from semver Git tags such as `v0.6.4`.
+Release tags are published from semver Git tags such as `v0.7.0`.
 
 ## Project Layout
 

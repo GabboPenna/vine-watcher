@@ -4,6 +4,7 @@ set -euo pipefail
 APP_NAME="vine-watcher-telegram"
 INSTALL_DIR="${INSTALL_DIR:-/opt/vine-watcher-telegram}"
 SERVICE_USER="${SERVICE_USER:-vinewatcher}"
+SERVICE_GROUP=""
 NODE_MAJOR_MIN=20
 
 say() {
@@ -51,6 +52,17 @@ require_root() {
   fi
 }
 
+validate_install_options() {
+  [[ "$INSTALL_DIR" = /* ]] || die "INSTALL_DIR must be an absolute path."
+  [[ "$INSTALL_DIR" != "/" ]] || die "INSTALL_DIR must not be the filesystem root."
+  [[ "$INSTALL_DIR" != *$'\n'* ]] || die "INSTALL_DIR contains an invalid newline."
+  [[ "$INSTALL_DIR" != *[[:space:]]* ]] || die "INSTALL_DIR must not contain whitespace."
+  [[ "$INSTALL_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "INSTALL_DIR contains unsupported characters."
+  [[ "/$INSTALL_DIR/" != *"/../"* ]] || die "INSTALL_DIR must not contain '..' path segments."
+  [[ "$SERVICE_USER" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || die "SERVICE_USER is not a valid system user name."
+  [[ "$SERVICE_USER" != "root" ]] || die "SERVICE_USER must be an unprivileged account."
+}
+
 repo_root() {
   cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd
 }
@@ -80,8 +92,10 @@ ensure_node() {
 create_user() {
   say "Creating service user"
   if ! id "$SERVICE_USER" >/dev/null 2>&1; then
-    useradd --system --create-home --home-dir "/var/lib/${SERVICE_USER}" --shell /usr/sbin/nologin "$SERVICE_USER"
+    useradd --system --user-group --create-home --home-dir "/var/lib/${SERVICE_USER}" --shell /usr/sbin/nologin "$SERVICE_USER"
   fi
+  SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+  install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 "/var/lib/${SERVICE_USER}"
 }
 
 copy_project() {
@@ -89,6 +103,9 @@ copy_project() {
   source_dir="$(repo_root)"
 
   say "Installing project into ${INSTALL_DIR}"
+  if systemctl list-unit-files vine-watcher.service >/dev/null 2>&1; then
+    systemctl stop vine-watcher.service || true
+  fi
   mkdir -p "$INSTALL_DIR"
   tar \
     --exclude='.git' \
@@ -99,13 +116,13 @@ copy_project() {
     --exclude='data/*.sqlite-*' \
     -C "$source_dir" -cf - . | tar -C "$INSTALL_DIR" -xf -
   chmod 755 "${INSTALL_DIR}/scripts/"*.sh
-  chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "/var/lib/${SERVICE_USER}"
+  chown -R "$SERVICE_USER:$SERVICE_GROUP" "$INSTALL_DIR" "/var/lib/${SERVICE_USER}"
 }
 
 install_node_dependencies() {
   say "Installing npm dependencies"
   cd "$INSTALL_DIR"
-  runuser -u "$SERVICE_USER" -- npm install --loglevel=error
+  runuser -u "$SERVICE_USER" -- env HOME="/var/lib/${SERVICE_USER}" npm ci --loglevel=error
 }
 
 install_playwright() {
@@ -145,10 +162,18 @@ TELEGRAM_CHAT_ID=${telegram_chat_id}
 TELEGRAM_CONTROL_ENABLED=${telegram_control}
 TELEGRAM_CONTROL_POLL_SECONDS=3
 TELEGRAM_CONTROL_LANGUAGE=${telegram_control_language}
+TELEGRAM_REQUEST_TIMEOUT_SECONDS=15
+TELEGRAM_REQUEST_RETRIES=2
 AMAZON_VINE_BASE_URL=${vine_url}
 SCAN_ALL_ITEMS=false
 SCAN_INTERVAL_SECONDS=${scan_interval}
 SCAN_JITTER_SECONDS=${scan_jitter}
+ADAPTIVE_SCAN_ENABLED=false
+ADAPTIVE_IDLE_AFTER_CYCLES=5
+ADAPTIVE_IDLE_INTERVAL_SECONDS=60
+ADAPTIVE_ACTIVE_CYCLES=3
+ADAPTIVE_ACTIVE_INTERVAL_SECONDS=15
+ADAPTIVE_ACTIVE_JITTER_SECONDS=3
 PANIC_MODE=false
 PANIC_UNTIL=
 PANIC_SCAN_INTERVAL_SECONDS=10
@@ -168,8 +193,19 @@ WAIT_FOR_NETWORK_IDLE=false
 PRODUCT_READY_TIMEOUT_SECONDS=5
 PAGE_SETTLE_SECONDS=1
 SECTION_DELAY_SECONDS=1
+SECTION_NAVIGATION_RETRIES=1
+SECTION_NAVIGATION_RETRY_DELAY_SECONDS=2
+SECTION_SCAN_CONCURRENCY=1
+REUSE_SECTION_PAGES=false
+DETAIL_VALUE_LOOKUP_ENABLED=true
+DETAIL_VALUE_LOOKUP_MAX_PER_CYCLE=10
+DETAIL_VALUE_LOOKUP_TIMEOUT_SECONDS=4
+DETAIL_VALUE_LOOKUP_RETRY_BASE_SECONDS=60
+DETAIL_VALUE_LOOKUP_RETRY_MAX_SECONDS=3600
+SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE=false
 BROWSER_RESTART_INTERVAL_MINUTES=180
 BROWSER_MEMORY_RECYCLE_MB=0
+BROWSER_MEMORY_RECYCLE_MIN_GROWTH_MB=256
 BROWSER_MEMORY_RECYCLE_COOLDOWN_MINUTES=10
 BLOCK_RESOURCE_TYPES=font,media
 LOG_LEVEL=info
@@ -177,6 +213,8 @@ DATABASE_PATH=./data/vine-watcher.sqlite
 PLAYWRIGHT_USER_DATA_DIR=./data/chromium-profile
 NOTIFY_CRITICAL_ERRORS=${notify_errors}
 CRITICAL_NOTIFICATION_COOLDOWN_SECONDS=900
+TRANSIENT_SCAN_MAX_FAILURES=3
+TRANSIENT_SCAN_BACKOFF_SECONDS=60
 SESSION_ATTENTION_MAX_FAILURES=2
 SESSION_ATTENTION_COOLDOWN_SECONDS=300
 VERIFY_SESSION_ATTENTION=true
@@ -184,13 +222,28 @@ SESSION_ATTENTION_GRACE_SECONDS=300
 SESSION_FAILURE_BACKOFF_SECONDS=90
 STOP_ON_SESSION_ATTENTION=true
 EOF
-  chown "$SERVICE_USER:$SERVICE_USER" "$env_file"
+  chown "$SERVICE_USER:$SERVICE_GROUP" "$env_file"
   chmod 600 "$env_file"
 }
 
 install_service() {
   say "Installing systemd service"
-  install -o root -g root -m 0644 "${INSTALL_DIR}/systemd/vine-watcher.service" /etc/systemd/system/vine-watcher.service
+  local defaults_file unit_file
+  defaults_file="$(mktemp)"
+  unit_file="$(mktemp)"
+  printf 'VINE_WATCHER_APP_DIR=%s\nVINE_WATCHER_SERVICE_USER=%s\n' \
+    "$INSTALL_DIR" "$SERVICE_USER" > "$defaults_file"
+  install -o root -g root -m 0644 "$defaults_file" /etc/default/vine-watcher
+  sed \
+    -e "s|^WorkingDirectory=.*|WorkingDirectory=${INSTALL_DIR}|" \
+    -e "s|^ExecStart=.*|ExecStart=${INSTALL_DIR}/scripts/run-service.sh|" \
+    -e "s|^User=.*|User=${SERVICE_USER}|" \
+    -e "s|^Environment=HOME=.*|Environment=HOME=/var/lib/${SERVICE_USER}|" \
+    -e "s|^Environment=APP_DIR=.*|Environment=APP_DIR=${INSTALL_DIR}|" \
+    -e "s|^ReadWritePaths=.*|ReadWritePaths=${INSTALL_DIR}/data /var/lib/${SERVICE_USER}|" \
+    "${INSTALL_DIR}/systemd/vine-watcher.service" > "$unit_file"
+  install -o root -g root -m 0644 "$unit_file" /etc/systemd/system/vine-watcher.service
+  rm -f "$defaults_file" "$unit_file"
   systemctl daemon-reload
   if yes_no "Enable the service at boot?" "Y"; then
     systemctl enable vine-watcher.service
@@ -200,6 +253,7 @@ install_service() {
 final_steps() {
   say "Smoke tests"
   cd "$INSTALL_DIR"
+  runuser -u "$SERVICE_USER" -- env HOME="/var/lib/${SERVICE_USER}" npm run validate
   runuser -u "$SERVICE_USER" -- env HOME="/var/lib/${SERVICE_USER}" npm run stats
   if yes_no "Send a Telegram test message now?" "Y"; then
     runuser -u "$SERVICE_USER" -- env HOME="/var/lib/${SERVICE_USER}" npm run test:telegram
@@ -226,6 +280,7 @@ final_steps() {
 
 main() {
   require_root
+  validate_install_options
   install_base_packages
   ensure_node
   create_user
