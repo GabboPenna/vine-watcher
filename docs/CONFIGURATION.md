@@ -160,6 +160,7 @@ REUSE_SECTION_PAGES=false
 DETAIL_VALUE_LOOKUP_ENABLED=true
 DETAIL_VALUE_LOOKUP_MAX_PER_CYCLE=10
 DETAIL_VALUE_LOOKUP_TIMEOUT_SECONDS=4
+DETAIL_VALUE_LOOKUP_MIN_INTERVAL_SECONDS=15
 DETAIL_VALUE_LOOKUP_RETRY_BASE_SECONDS=60
 DETAIL_VALUE_LOOKUP_RETRY_MAX_SECONDS=3600
 SCANNER_TURBO_ONLY_DURING_ADAPTIVE_ACTIVE=false
@@ -213,7 +214,7 @@ PRODUCT_READY_TIMEOUT_SECONDS=2
 
 `REUSE_SECTION_PAGES=true` keeps a dedicated Chromium page open for each section and navigates it again on the next cycle instead of creating and closing a new page every time. If a reused page errors, Vine Watcher discards it and creates a fresh one on the next scan.
 
-`DETAIL_VALUE_LOOKUP_ENABLED=true` lets Vine Watcher perform a short read-only Vine detail lookup when a product card does not expose the estimated value. This reads the Vine detail `taxValue` field, stores it as `estimated_value_eur`, and lets `MIN_VALUE_TO_NOTIFY_EUR` work from the same value Amazon shows as `Valore fiscale stimato`. Lookups are limited per cycle and persisted as a retry queue. Failed or deferred lookups are retried with exponential backoff between `DETAIL_VALUE_LOOKUP_RETRY_BASE_SECONDS` and `DETAIL_VALUE_LOOKUP_RETRY_MAX_SECONDS`; they are not forgotten after the first scan.
+`DETAIL_VALUE_LOOKUP_ENABLED=true` lets Vine Watcher perform a short read-only Vine detail lookup when a product card does not expose the estimated value. This reads the Vine detail `taxValue` field, stores it as `estimated_value_eur`, and lets `MIN_VALUE_TO_NOTIFY_EUR` work from the same value Amazon shows as `Valore fiscale stimato`. Lookups are limited per cycle and globally spaced by `DETAIL_VALUE_LOOKUP_MIN_INTERVAL_SECONDS`, including across adaptive cycles, so a backlog cannot create a burst of Vine detail requests. They are persisted as a retry queue; failed or deferred lookups use exponential backoff between `DETAIL_VALUE_LOOKUP_RETRY_BASE_SECONDS` and `DETAIL_VALUE_LOOKUP_RETRY_MAX_SECONDS` and are not forgotten after the first scan.
 
 If a product already matches score, strict, or notify-all rules, Vine Watcher sends the Telegram notification immediately. When the value lookup finishes afterward, it edits the same Telegram message or caption with the recovered value. If the product would only be notified because it crosses `MIN_VALUE_TO_NOTIFY_EUR`, the lookup must happen before notification because the value is the trigger.
 

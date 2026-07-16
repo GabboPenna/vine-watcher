@@ -35,6 +35,7 @@ This project uses semantic versioning.
 - Fixed value-only matches being permanently skipped when the first lookup failed or exceeded the per-cycle budget.
 - Fixed parallel scans continuing in the background after a session-attention failure.
 - Fixed a successful photo notification being duplicated as text if its optional details message failed.
+- Added cross-cycle spacing for Vine detail value lookups so an upgrade backlog cannot create a burst of detail requests.
 
 ## [0.6.4] - 2026-07-09
 

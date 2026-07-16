@@ -128,6 +128,7 @@ function safeConfigSnapshot(config) {
     browserMemoryRecycleMinGrowthMb: config.browserMemoryRecycleMinGrowthMb,
     detailValueLookupEnabled: config.detailValueLookupEnabled,
     detailValueLookupMaxPerCycle: config.detailValueLookupMaxPerCycle,
+    detailValueLookupMinIntervalMs: config.detailValueLookupMinIntervalMs,
     detailValueLookupRetryBaseMs: config.detailValueLookupRetryBaseMs,
     detailValueLookupRetryMaxMs: config.detailValueLookupRetryMaxMs,
     scannerTurboOnlyDuringAdaptiveActive: config.scannerTurboOnlyDuringAdaptiveActive,
@@ -237,7 +238,8 @@ async function runCycle({
   logger,
   dryRun = false,
   layoutHealthState = null,
-  adaptiveState = null
+  adaptiveState = null,
+  valueLookupState = null
 }) {
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
@@ -261,6 +263,7 @@ async function runCycle({
   const sections = [];
   const successfulSectionNames = [];
   const sectionFailures = [];
+  const lookupRateState = valueLookupState || { lastAttemptAt: 0 };
 
   if (scanner.config !== scanConfig) {
     scanner.config = scanConfig;
@@ -278,9 +281,14 @@ async function runCycle({
 
   async function lookupDetailValue(valueProduct) {
     const detailLookupBudget = Math.max(0, Number(config.detailValueLookupMaxPerCycle || 0));
+    const minLookupIntervalMs = Math.max(0, Number(config.detailValueLookupMinIntervalMs || 0));
+    const now = Date.now();
     if (
       !config.detailValueLookupEnabled ||
       detailValueLookups >= detailLookupBudget ||
+      (minLookupIntervalMs > 0 &&
+        lookupRateState.lastAttemptAt > 0 &&
+        now - lookupRateState.lastAttemptAt < minLookupIntervalMs) ||
       hasEstimatedValue(valueProduct) ||
       !valueProduct.vine_recommendation_id ||
       typeof scanner.enrichProductValue !== "function" ||
@@ -295,6 +303,7 @@ async function runCycle({
     }
 
     detailValueLookups += 1;
+    lookupRateState.lastAttemptAt = now;
     try {
       const enrichedProduct = await scanner.enrichProductValue(valueProduct);
       if (hasEstimatedValue(enrichedProduct)) {
@@ -758,6 +767,9 @@ async function main() {
   const layoutHealthState = {
     lowProductCycles: 0
   };
+  const valueLookupState = {
+    lastAttemptAt: 0
+  };
 
   function refreshConfig() {
     effectiveConfig = validateConfig(applyRuntimeSettings(baseConfig, storage.getSettings()));
@@ -936,7 +948,8 @@ async function main() {
         logger,
         dryRun,
         layoutHealthState,
-        adaptiveState
+        adaptiveState,
+        valueLookupState
       });
       storage.recordScanCycle(runtimeStatus.lastCycle);
       if (runtimeStatus.lastCycle.scanned <= effectiveConfig.layoutHealthMinProducts) {

@@ -926,6 +926,8 @@ function loadConfig(overrides = {}) {
     detailValueLookupMaxPerCycle: parseNumber(readEnv("DETAIL_VALUE_LOOKUP_MAX_PER_CYCLE", "10"), 10, 0),
     detailValueLookupTimeoutMs:
       parseNumber(readEnv("DETAIL_VALUE_LOOKUP_TIMEOUT_SECONDS", "4"), 4, 1) * 1000,
+    detailValueLookupMinIntervalMs:
+      parseNumber(readEnv("DETAIL_VALUE_LOOKUP_MIN_INTERVAL_SECONDS", "15"), 15, 0) * 1000,
     detailValueLookupRetryBaseMs:
       parseNumber(readEnv("DETAIL_VALUE_LOOKUP_RETRY_BASE_SECONDS", "60"), 60, 5) * 1000,
     detailValueLookupRetryMaxMs:

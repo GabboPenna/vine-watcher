@@ -1348,7 +1348,7 @@ class TelegramControl {
             `🎯 Min score: ${config.minScoreToNotify}`,
             `💶 Min value: ${formatEuro(config.minValueToNotifyEur)}`,
             `💶 Vine value lookup: ${boolText(config.detailValueLookupEnabled, language)} ` +
-              `(${config.detailValueLookupMaxPerCycle}/cycle)`,
+              `(${config.detailValueLookupMaxPerCycle}/cycle, min ${seconds(config.detailValueLookupMinIntervalMs)})`,
             `🧪 Strict mode: ${boolText(config.strictNotifyMode, language)} ` +
               `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
             `⚡ Panic mode: ${boolText(isPanicActive(config), language)} ` +
@@ -1402,7 +1402,7 @@ class TelegramControl {
             `🎯 Min score: ${config.minScoreToNotify}`,
             `💶 Min value: ${formatEuro(config.minValueToNotifyEur)}`,
             `💶 Vine value lookup: ${boolText(config.detailValueLookupEnabled, language)} ` +
-              `(${config.detailValueLookupMaxPerCycle}/cycle)`,
+              `(${config.detailValueLookupMaxPerCycle}/cycle, min ${seconds(config.detailValueLookupMinIntervalMs)})`,
             `🧪 Strict mode: ${boolText(config.strictNotifyMode, language)} ` +
               `(${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-)`,
             `⚡ Panic mode: ${boolText(isPanicActive(config), language)}`,
@@ -1434,7 +1434,7 @@ class TelegramControl {
             `🎯 Min score: ${config.minScoreToNotify}`,
             `💶 Min value: ${formatEuro(config.minValueToNotifyEur)}`,
             `💶 Lookup valore Vine: ${boolText(config.detailValueLookupEnabled, language)} ` +
-              `(${config.detailValueLookupMaxPerCycle}/giro, timeout ${seconds(config.detailValueLookupTimeoutMs)})`,
+              `(${config.detailValueLookupMaxPerCycle}/giro, minimo ${seconds(config.detailValueLookupMinIntervalMs)}, timeout ${seconds(config.detailValueLookupTimeoutMs)})`,
             `🔁 Retry valore: ${seconds(config.detailValueLookupRetryBaseMs)} → ${seconds(config.detailValueLookupRetryMaxMs)}`,
             `🧪 Strict: ${boolText(config.strictNotifyMode, language)}`,
             `🧪 Strict signals: ${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-`,
@@ -1472,7 +1472,7 @@ class TelegramControl {
             `🎯 Min score: ${config.minScoreToNotify}`,
             `💶 Min value: ${formatEuro(config.minValueToNotifyEur)}`,
             `💶 Vine value lookup: ${boolText(config.detailValueLookupEnabled, language)} ` +
-              `(${config.detailValueLookupMaxPerCycle}/cycle, timeout ${seconds(config.detailValueLookupTimeoutMs)})`,
+              `(${config.detailValueLookupMaxPerCycle}/cycle, minimum ${seconds(config.detailValueLookupMinIntervalMs)}, timeout ${seconds(config.detailValueLookupTimeoutMs)})`,
             `🔁 Value retry: ${seconds(config.detailValueLookupRetryBaseMs)} → ${seconds(config.detailValueLookupRetryMaxMs)}`,
             `🧪 Strict: ${boolText(config.strictNotifyMode, language)}`,
             `🧪 Strict signals: ${config.strictMinPositiveSignals}+ / ${config.strictMaxNegativeSignals}-`,

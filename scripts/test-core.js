@@ -1680,6 +1680,77 @@ async function testRunCycleRetriesDeferredValueLookup() {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+async function testValueLookupSpacingPersistsAcrossCycles() {
+  const section = { name: "Additional items", url: "https://www.amazon.it/vine/vine-items?queue=encore" };
+  const config = loadConfig({
+    sections: [section],
+    notifyAllProducts: false,
+    notifyAllProductsWindow: "",
+    minScoreToNotify: 999,
+    minValueToNotifyEur: 1000,
+    detailValueLookupEnabled: true,
+    detailValueLookupMaxPerCycle: 10,
+    detailValueLookupMinIntervalMs: 60000,
+    sectionDelayMs: 0
+  });
+  const products = ["B0SPACE001", "B0SPACE002"].map((asin) => ({
+    asin,
+    title: `Spaced lookup ${asin}`,
+    section: section.name,
+    section_url: section.url,
+    estimated_value_eur: null,
+    vine_recommendation_id: `APJ#${asin}#vine.enrollment.test`,
+    raw_text: ""
+  }));
+  const rows = new Map();
+  let nextId = 1;
+  let lookupCalls = 0;
+  const scanner = {
+    config,
+    async scanSection() {
+      return products;
+    },
+    async enrichProductValue(product) {
+      lookupCalls += 1;
+      return { ...product, estimated_value_eur: 1 };
+    }
+  };
+  const storage = {
+    findExisting(product) {
+      return rows.get(product.asin) || null;
+    },
+    saveProduct(product) {
+      const existing = rows.get(product.asin);
+      const row = { ...existing, ...product, id: existing ? existing.id : nextId++, notified: 0 };
+      rows.set(product.asin, row);
+      return { isNew: !existing, product: row };
+    },
+    recordValueLookupAttempt(id) {
+      const row = Array.from(rows.values()).find((candidate) => candidate.id === id);
+      return row;
+    },
+    markMissingProducts() {
+      return 0;
+    }
+  };
+  const valueLookupState = { lastAttemptAt: 0 };
+  const telegram = {
+    async sendProduct() {
+      throw new Error("No notification expected");
+    }
+  };
+
+  const first = await runCycle({ scanner, storage, telegram, config, logger: silentLogger, valueLookupState });
+  const second = await runCycle({ scanner, storage, telegram, config, logger: silentLogger, valueLookupState });
+  valueLookupState.lastAttemptAt = Date.now() - config.detailValueLookupMinIntervalMs;
+  const third = await runCycle({ scanner, storage, telegram, config, logger: silentLogger, valueLookupState });
+
+  assert.equal(first.detailValueLookups, 1);
+  assert.equal(second.detailValueLookups, 0);
+  assert.equal(third.detailValueLookups, 1);
+  assert.equal(lookupCalls, 2);
+}
+
 async function testParallelSessionFailureCancelsOtherScans() {
   const sections = [
     { name: "Session failure", url: "https://www.amazon.it/vine/vine-items?queue=potluck" },
@@ -1967,6 +2038,7 @@ async function main() {
   await testRunCycleUpdatesNotificationAfterDetailValueLookup();
   await testRunCyclePersistsValuePipeline();
   await testRunCycleRetriesDeferredValueLookup();
+  await testValueLookupSpacingPersistsAcrossCycles();
   await testParallelSessionFailureCancelsOtherScans();
   await testTelegramRetriesTransientFailures();
   await testHealthServerFreshnessAndAuth();
