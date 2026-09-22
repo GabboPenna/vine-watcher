@@ -46,6 +46,13 @@ function nextScanReason(config, adaptiveState = null, overrideReason = "") {
   return "";
 }
 
+// elapsedMs comes from a monotonic clock. Backoff is a minimum pause measured
+// after the failed cycle, not a cadence that can be consumed by slow requests.
+function remainingScanDelayMs(intervalMs, elapsedMs, backoffMs = 0) {
+  if (backoffMs > 0) return backoffMs;
+  return Math.max(0, intervalMs - Math.max(0, elapsedMs));
+}
+
 function updateAdaptiveState(adaptiveState, summary, config) {
   if (!config.adaptiveScanEnabled) {
     adaptiveState.idleCycles = 0;
@@ -98,6 +105,7 @@ module.exports = {
   memoryRecycleThresholdMb,
   nextScanDelayMs,
   nextScanReason,
+  remainingScanDelayMs,
   scannerConfigForCycle,
   updateAdaptiveState
 };

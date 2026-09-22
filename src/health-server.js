@@ -58,6 +58,11 @@ function metricsText(stats, status) {
     metricLine("vine_watcher_last_cycle_scanned", lastCycle.scanned, "Products scanned in the latest cycle"),
     metricLine("vine_watcher_last_cycle_new", lastCycle.newProducts, "New products found in the latest cycle"),
     metricLine("vine_watcher_last_cycle_notified", lastCycle.notified, "Notifications sent in the latest cycle"),
+    metricLine("vine_watcher_value_worker_attempts", status.valueWorker && status.valueWorker.attempts, "Background value lookups since startup"),
+    metricLine("vine_watcher_value_worker_found", status.valueWorker && status.valueWorker.found, "Background values recovered since startup"),
+    metricLine("vine_watcher_value_worker_failures", status.valueWorker && status.valueWorker.failures, "Failed background value lookups since startup"),
+    metricLine("vine_watcher_value_worker_notified", status.valueWorker && status.valueWorker.notified, "Value-triggered notifications since startup"),
+    metricLine("vine_watcher_value_worker_edited", status.valueWorker && status.valueWorker.edited, "Background value message edits since startup"),
     metricLine(
       "vine_watcher_last_cycle_success",
       status.lastCycle ? (lastCycle.success === false ? 0 : 1) : 0,
@@ -111,6 +116,7 @@ function startHealthServer({ config, storage, getStatus, logger, version = "" })
         lastSuccessfulCycleAt: lastSuccessfulCycleAt || null,
         successAgeSeconds: successAgeMs === null ? null : Math.round(successAgeMs / 1000),
         memory: status.memory || null,
+        valueWorker: status.valueWorker || null,
         stats: stats.totals || {}
       });
       return;

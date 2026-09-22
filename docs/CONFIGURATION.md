@@ -138,6 +138,8 @@ SECTIONS_JSON=[{"name":"Only recommended","url":"https://www.amazon.it/vine/vine
 
 ## Scanner
 
+Since 0.8.0, scan intervals are measured from the start of one cycle to the next. With a 20-second interval and 4 seconds of work, the next scan waits about 16 seconds. Jitter and adaptive/panic intervals follow the same rule. A cycle that takes longer than its interval finishes before the next starts; cycles never overlap or accumulate catch-up runs. Error backoff remains a full pause after the failed cycle.
+
 ```bash
 SCAN_INTERVAL_SECONDS=30
 SCAN_JITTER_SECONDS=10
@@ -214,9 +216,15 @@ PRODUCT_READY_TIMEOUT_SECONDS=2
 
 `REUSE_SECTION_PAGES=true` keeps a dedicated Chromium page open for each section and navigates it again on the next cycle instead of creating and closing a new page every time. If a reused page errors, Vine Watcher discards it and creates a fresh one on the next scan.
 
+`/fast on` and `/profile drop` enable concurrency `2` and page reuse. `/fast off` restores concurrency `1` and disables reuse. These are runtime overrides, so `/reset all` restores your `.env` settings.
+
 `DETAIL_VALUE_LOOKUP_ENABLED=true` lets Vine Watcher perform a short read-only Vine detail lookup when a product card does not expose the estimated value. This reads the Vine detail `taxValue` field, stores it as `estimated_value_eur`, and lets `MIN_VALUE_TO_NOTIFY_EUR` work from the same value Amazon shows as `Valore fiscale stimato`. Lookups are limited per cycle and globally spaced by `DETAIL_VALUE_LOOKUP_MIN_INTERVAL_SECONDS`, including across adaptive cycles, so a backlog cannot create a burst of Vine detail requests. They are persisted as a retry queue; failed or deferred lookups use exponential backoff between `DETAIL_VALUE_LOOKUP_RETRY_BASE_SECONDS` and `DETAIL_VALUE_LOOKUP_RETRY_MAX_SECONDS` and are not forgotten after the first scan.
 
-If a product already matches score, strict, or notify-all rules, Vine Watcher sends the Telegram notification immediately. When the value lookup finishes afterward, it edits the same Telegram message or caption with the recovered value. If the product would only be notified because it crosses `MIN_VALUE_TO_NOTIFY_EUR`, the lookup must happen before notification because the value is the trigger.
+If a product already matches score, strict, or notify-all rules, Vine Watcher sends the Telegram notification immediately. A single background worker performs value lookups after a successful scan; it can remain active while the next scan runs. Failed sections do not start new lookups, and session failures pause the worker. Recycling Chromium waits for the current worker operation before closing its browser context.
+
+When a value is recovered, the worker edits the same Telegram message or caption. Pending edits and retry deadlines survive restart. New notifications take priority over queued edits; an already-running Telegram request completes first. Product sends and edits are paced at least one second apart, and scan alerts and value-triggered alerts share `MAX_NOTIFICATIONS_PER_CYCLE`. A product matching only `MIN_VALUE_TO_NOTIFY_EUR` can notify as soon as its value is found, without waiting for another scan. Values recovered for products that have disappeared are saved without restoring them to the current inventory or sending an alert.
+
+The health endpoint includes `valueWorker` counters since startup, and `/metrics` exposes `vine_watcher_value_worker_*` gauges. Per-cycle notification counts cover foreground scan alerts; the worker's `notified` counter records value-triggered background alerts.
 
 To keep resource use lower while Vine is quiet, enable turbo scanning only during adaptive active windows:
 

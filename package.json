@@ -1,6 +1,6 @@
 {
   "name": "vine-watcher",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Local Amazon Vine watcher that sends Telegram notifications without requesting products.",
   "license": "MIT",
   "type": "commonjs",
@@ -38,7 +38,7 @@
     "check:bash": "node scripts/check-bash.js",
     "check:secrets": "node scripts/check-secrets.js",
     "check:release": "node scripts/check-release.js",
-    "test": "node scripts/test-core.js",
+    "test": "node scripts/test-core.js && node scripts/test-latency.js",
     "validate": "npm run check:syntax && npm run check:bash && npm test && npm run check:secrets && npm run check:release",
     "test:telegram": "node scripts/test-telegram.js",
     "smoke:browser": "node scripts/smoke-browser.js",

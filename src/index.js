@@ -1,6 +1,9 @@
 "use strict";
 
 const fs = require("fs");
+const { performance } = require("node:perf_hooks");
+const { ProductSender } = require("./product-sender");
+const { ValueWorker } = require("./value-worker");
 const { createBrowserContext } = require("./browser");
 const { loadConfig, validateConfig } = require("./config");
 const { TelegramControl } = require("./control");
@@ -27,6 +30,7 @@ const {
   memoryRecycleThresholdMb,
   nextScanDelayMs,
   nextScanReason,
+  remainingScanDelayMs,
   scannerConfigForCycle,
   updateAdaptiveState
 } = require("./scheduler");
@@ -155,9 +159,6 @@ function failedCycleSummary(startedAt, error, failureKind = "error") {
     skippedNoTrigger: 0,
     skippedNotificationLimit: 0,
     telegramFailures: 0,
-    detailValueLookups: 0,
-    detailValueLookupHits: 0,
-    detailValueLookupFailures: 0,
     sectionFailures: [],
     dryRun: false,
     success: false,
@@ -176,33 +177,6 @@ function hasEstimatedValue(product) {
   }
   const parsed = Number(product.estimated_value_eur);
   return Number.isFinite(parsed) && parsed > 0;
-}
-
-function isValueLookupDue(product, now = Date.now()) {
-  if (hasEstimatedValue(product)) {
-    return false;
-  }
-  const nextAt = Date.parse(String((product && product.value_lookup_next_at) || ""));
-  return !Number.isFinite(nextAt) || nextAt <= now;
-}
-
-function nextValueLookupRetryAt(product, config, now = Date.now()) {
-  const attempts = Math.max(0, Number((product && product.value_lookup_attempts) || 0));
-  const baseMs = Math.max(1000, Number(config.detailValueLookupRetryBaseMs) || 60000);
-  const maxMs = Math.max(baseMs, Number(config.detailValueLookupRetryMaxMs) || 3600000);
-  const delayMs = Math.min(maxMs, baseMs * 2 ** Math.min(attempts, 8));
-  return new Date(now + delayMs).toISOString();
-}
-
-function storedTelegramMessage(product) {
-  if (!product || !product.telegram_message_id) {
-    return null;
-  }
-  return {
-    chatId: product.telegram_chat_id || undefined,
-    messageId: Number(product.telegram_message_id),
-    kind: product.telegram_message_kind || "message"
-  };
 }
 
 function layoutWarningsForSummary(summary, config, layoutHealthState = null) {
@@ -238,8 +212,7 @@ async function runCycle({
   logger,
   dryRun = false,
   layoutHealthState = null,
-  adaptiveState = null,
-  valueLookupState = null
+  adaptiveState = null
 }) {
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
@@ -257,13 +230,9 @@ async function runCycle({
   let skippedNoTrigger = 0;
   let skippedNotificationLimit = 0;
   let telegramFailures = 0;
-  let detailValueLookups = 0;
-  let detailValueLookupHits = 0;
-  let detailValueLookupFailures = 0;
   const sections = [];
   const successfulSectionNames = [];
   const sectionFailures = [];
-  const lookupRateState = valueLookupState || { lastAttemptAt: 0 };
 
   if (scanner.config !== scanConfig) {
     scanner.config = scanConfig;
@@ -277,89 +246,6 @@ async function runCycle({
         ? "Scanner turbo enabled for adaptive active cycle"
         : "Scanner turbo sleeping until adaptive active cycle"
     );
-  }
-
-  async function lookupDetailValue(valueProduct) {
-    const detailLookupBudget = Math.max(0, Number(config.detailValueLookupMaxPerCycle || 0));
-    const minLookupIntervalMs = Math.max(0, Number(config.detailValueLookupMinIntervalMs || 0));
-    const now = Date.now();
-    if (
-      !config.detailValueLookupEnabled ||
-      detailValueLookups >= detailLookupBudget ||
-      (minLookupIntervalMs > 0 &&
-        lookupRateState.lastAttemptAt > 0 &&
-        now - lookupRateState.lastAttemptAt < minLookupIntervalMs) ||
-      hasEstimatedValue(valueProduct) ||
-      !valueProduct.vine_recommendation_id ||
-      typeof scanner.enrichProductValue !== "function" ||
-      !isValueLookupDue(valueProduct)
-    ) {
-      return {
-        product: valueProduct,
-        attempted: false,
-        found: hasEstimatedValue(valueProduct),
-        error: null
-      };
-    }
-
-    detailValueLookups += 1;
-    lookupRateState.lastAttemptAt = now;
-    try {
-      const enrichedProduct = await scanner.enrichProductValue(valueProduct);
-      if (hasEstimatedValue(enrichedProduct)) {
-        detailValueLookupHits += 1;
-        logger.info(
-          `Vine detail value found value=${formatEuro(enrichedProduct.estimated_value_eur)} ` +
-            `section="${enrichedProduct.section}" title="${enrichedProduct.title}"`
-        );
-        return {
-          product: enrichedProduct,
-          attempted: true,
-          found: true,
-          error: null
-        };
-      }
-      return {
-        product: valueProduct,
-        attempted: true,
-        found: false,
-        error: null
-      };
-    } catch (error) {
-      detailValueLookupFailures += 1;
-      logger.warn(`Vine detail value lookup failed for "${valueProduct.title}": ${error.message}`);
-      return {
-        product: valueProduct,
-        attempted: true,
-        found: false,
-        error
-      };
-    }
-  }
-
-  function recordDetailLookup(product, lookupResult) {
-    if (!lookupResult || !lookupResult.attempted || !product || !product.id) {
-      return product;
-    }
-    if (typeof storage.recordValueLookupAttempt !== "function") {
-      return product;
-    }
-    const recorded = storage.recordValueLookupAttempt(product.id, {
-      found: lookupResult.found,
-      error: Boolean(lookupResult.error),
-      nextAt: lookupResult.found ? null : nextValueLookupRetryAt(product, config)
-    });
-    if (!recorded) {
-      return product;
-    }
-    return {
-      ...recorded,
-      ...product,
-      value_lookup_attempts: recorded.value_lookup_attempts,
-      value_lookup_last_at: recorded.value_lookup_last_at,
-      value_lookup_next_at: recorded.value_lookup_next_at,
-      value_lookup_status: recorded.value_lookup_status
-    };
   }
 
   async function processSectionProducts(section, products) {
@@ -378,38 +264,22 @@ async function runCycle({
 
       const preliminaryExisting = storage.findExisting(product);
       const preliminaryNotified = preliminaryExisting && preliminaryExisting.notified === 1;
-      let workingProduct = { ...(preliminaryExisting || {}), ...product };
+      const workingProduct = { ...(preliminaryExisting || {}), ...product };
       if (!hasEstimatedValue(workingProduct) && hasEstimatedValue(preliminaryExisting)) {
         workingProduct.estimated_value_eur = preliminaryExisting.estimated_value_eur;
       }
 
-      let triggers = notificationTriggers(workingProduct, scoring, config);
-      const valueLookupCanUnlockNotification =
-        !preliminaryNotified &&
-        triggers.length === 0 &&
-        config.minValueToNotifyEur > 0 &&
-        isValueLookupDue(workingProduct);
-      let preliminaryLookup = null;
-
-      if (valueLookupCanUnlockNotification) {
-        preliminaryLookup = await lookupDetailValue(workingProduct);
-        workingProduct = preliminaryLookup.product;
-        triggers = notificationTriggers(workingProduct, scoring, config);
-      }
-
+      const triggers = notificationTriggers(workingProduct, scoring, config);
       const blockers = notificationBlockers(workingProduct, scoring, config, preliminaryNotified);
       const hasTrigger = triggers.length > 0;
       const preliminaryDecision = preliminaryNotified ? "already_notified" : hasTrigger ? "candidate" : "no_trigger";
-      let saved = storage.saveProduct(workingProduct, scoring, {
+      const saved = storage.saveProduct(workingProduct, scoring, {
         inventoryAt,
         triggers,
         blockers,
         configSnapshot,
         decision: preliminaryDecision
       });
-      if (preliminaryLookup && preliminaryLookup.attempted) {
-        saved.product = recordDetailLookup(saved.product, preliminaryLookup);
-      }
       if (saved.isNew) {
         newProducts += 1;
         logger.info(
@@ -420,41 +290,6 @@ async function runCycle({
 
       const shouldNotify = saved.product.notified !== 1 && triggers.length > 0;
       if (!shouldNotify) {
-        if (
-          saved.product.notified === 1 &&
-          !hasEstimatedValue(saved.product) &&
-          saved.product.vine_recommendation_id &&
-          isValueLookupDue(saved.product)
-        ) {
-          const backgroundLookup = await lookupDetailValue(saved.product);
-          if (backgroundLookup.attempted) {
-            if (backgroundLookup.found) {
-              const enrichedSaved = storage.saveProduct(backgroundLookup.product, scoring, {
-                inventoryAt,
-                triggers: notificationTriggers(backgroundLookup.product, scoring, config),
-                blockers: ["already notified"],
-                configSnapshot,
-                decision: "already_notified_value_enriched"
-              });
-              saved.product = enrichedSaved.product;
-              const sentMessage = storedTelegramMessage(saved.product);
-              if (sentMessage && typeof telegram.editProductNotification === "function") {
-                await telegram
-                  .editProductNotification(sentMessage, saved.product, {
-                    ...scoring,
-                    notificationTriggers: notificationTriggers(saved.product, scoring, config)
-                  })
-                  .catch((editError) => {
-                    logger.warn(
-                      `Deferred Telegram value update failed for product id=${saved.product.id}: ${editError.message}`
-                    );
-                  });
-              }
-            }
-            saved.product = recordDetailLookup(saved.product, backgroundLookup);
-          }
-        }
-
         if (saved.product.notified === 1) {
           skippedAlreadyNotified += 1;
         } else {
@@ -493,9 +328,6 @@ async function runCycle({
               notificationTriggers: triggers
             });
         if (sent) {
-          let finalProduct = saved.product;
-          let finalTriggers = triggers;
-
           if (dryRun) {
             dryRunMatches += 1;
             logger.info(
@@ -512,33 +344,10 @@ async function runCycle({
               `Telegram notification sent for product id=${saved.product.id} score=${scoring.score} ` +
                 `value=${formatEuro(saved.product.estimated_value_eur)} triggers="${triggers.join("; ")}"`
             );
-
-            if (
-              !hasEstimatedValue(saved.product) &&
-              saved.product.vine_recommendation_id &&
-              isValueLookupDue(saved.product)
-            ) {
-              const postNotificationLookup = await lookupDetailValue(saved.product);
-              if (postNotificationLookup.attempted && postNotificationLookup.found) {
-                finalProduct = postNotificationLookup.product;
-                finalTriggers = notificationTriggers(finalProduct, scoring, config);
-                if (typeof telegram.editProductNotification === "function") {
-                  await telegram
-                    .editProductNotification(sent, finalProduct, {
-                      ...scoring,
-                      notificationTriggers: finalTriggers
-                    })
-                    .catch((editError) => {
-                      logger.warn(`Telegram value update failed for product id=${saved.product.id}: ${editError.message}`);
-                    });
-                }
-              }
-              finalProduct = recordDetailLookup(finalProduct, postNotificationLookup);
-            }
           }
-          storage.saveProduct(finalProduct, scoring, {
+          storage.saveProduct(saved.product, scoring, {
             inventoryAt,
-            triggers: finalTriggers,
+            triggers,
             blockers: ["no blockers"],
             configSnapshot,
             decision: dryRun ? "dry_run_would_notify" : "notified"
@@ -701,9 +510,6 @@ async function runCycle({
     skippedNoTrigger,
     skippedNotificationLimit,
     telegramFailures,
-    detailValueLookups,
-    detailValueLookupHits,
-    detailValueLookupFailures,
     sectionFailures: sectionFailures.map((failure) => ({
       section: failure.section.name,
       error: failure.error && failure.error.message ? failure.error.message : String(failure.error)
@@ -718,7 +524,7 @@ async function runCycle({
   logger.info(
     `Cycle complete: scanned=${scanned} new=${newProducts} gone=${disappearedProducts} notified=${notified} max_score=${
       maxScore === null ? "n/d" : maxScore
-    } detail_value=${detailValueLookupHits}/${detailValueLookups} failed=${detailValueLookupFailures} ` +
+    } ` +
       `elapsed=${elapsedSeconds}s outcome=${outcome}`
   );
   if (summary.layoutWarnings.length > 0) {
@@ -759,6 +565,8 @@ async function main() {
   let lastMaintenanceAt = Date.now();
   let maintenancePromise = null;
   let healthServer = null;
+  let valueWorker = null;
+  const productSender = new ProductSender({ telegram, storage });
   const adaptiveState = {
     idleCycles: 0,
     activeCyclesRemaining: 0,
@@ -813,6 +621,7 @@ async function main() {
   }
 
   async function openBrowserContext(reason) {
+    if (valueWorker) await valueWorker.pause();
     if (context) {
       logger.info(`Closing Chromium context before reopening (${reason})`);
       if (scanner && scanner.close) {
@@ -835,11 +644,20 @@ async function main() {
       config: effectiveConfig,
       logger: logger.child("scanner")
     });
+    if (valueWorker) valueWorker.resume();
     logger.info(
       `Chromium context ready (${reason}); recycle_interval=${Math.round(
         effectiveConfig.browserRestartIntervalMs / 60000
       )}m`
     );
+  }
+
+  async function stopProductWork() {
+    // Pause before cancelling queued edits, keeping them durable for the restart.
+    const paused = valueWorker ? valueWorker.pause() : Promise.resolve();
+    await productSender.close();
+    await paused;
+    if (valueWorker) await valueWorker.close();
   }
 
   async function shutdown(signal, exitCode = 0) {
@@ -854,6 +672,7 @@ async function main() {
     if (healthServer) {
       await new Promise((resolve) => healthServer.close(resolve)).catch(() => {});
     }
+    await stopProductWork();
     if (scanner && scanner.close) {
       await scanner.close().catch((error) => logger.warn(`Scanner page cleanup failed: ${error.message}`));
       scanner = null;
@@ -883,10 +702,14 @@ async function main() {
 
   storage.init();
   refreshConfig();
+  valueWorker = new ValueWorker({
+    storage, telegram: productSender, getConfig: () => effectiveConfig,
+    getScanner: () => scanner, logger: logger.child("values"), rateState: valueLookupState
+  });
   healthServer = startHealthServer({
     config: effectiveConfig,
     storage,
-    getStatus: () => runtimeStatus,
+    getStatus: () => ({ ...runtimeStatus, valueWorker: valueWorker.stats }),
     logger: logger.child("health"),
     version
   });
@@ -896,7 +719,7 @@ async function main() {
     telegram,
     storage,
     getConfig: () => refreshConfig(),
-    getStatus: () => runtimeStatus,
+    getStatus: () => ({ ...runtimeStatus, valueWorker: valueWorker.stats }),
     logger: logger.child("control")
   });
   if (!once) {
@@ -926,6 +749,8 @@ async function main() {
     refreshConfig();
     scanner.config = effectiveConfig;
     const cycleStartedAt = Date.now();
+    const cycleStartedMonotonic = performance.now();
+    productSender.beginCycle(effectiveConfig.maxNotificationsPerCycle);
     let cycleFailureKind = "runtime_error";
     let cycleFailureRecorded = false;
     const recordCycleFailure = (error) => {
@@ -943,13 +768,12 @@ async function main() {
       runtimeStatus.lastCycle = await runCycle({
         scanner,
         storage,
-        telegram,
+        telegram: productSender,
         config: effectiveConfig,
         logger,
         dryRun,
         layoutHealthState,
-        adaptiveState,
-        valueLookupState
+        adaptiveState
       });
       storage.recordScanCycle(runtimeStatus.lastCycle);
       if (runtimeStatus.lastCycle.scanned <= effectiveConfig.layoutHealthMinProducts) {
@@ -962,7 +786,14 @@ async function main() {
       consecutiveTransientScanFailures = 0;
       lastKnownGoodSessionAt = Date.now();
       runtimeStatus.lastSuccessfulCycleAt = lastKnownGoodSessionAt;
+      valueWorker.resume();
+      if (!dryRun) {
+        const batch = valueWorker.kick(runtimeStatus.lastCycle.sections
+          .filter((section) => !section.error).map((section) => section.name));
+        if (once && batch) await batch;
+      }
     } catch (error) {
+      valueWorker.paused = true;
       if (error instanceof SessionNeedsAttentionError) {
         cycleFailureKind = `session_${error.kind || "attention"}`;
         let sessionAttentionConfirmed = true;
@@ -1132,8 +963,8 @@ async function main() {
 
     const recycleReason = browserRestartReason(effectiveConfig);
     scanner.config = effectiveConfig;
-    const waitMs =
-      nextDelayOverrideMs > 0 ? nextDelayOverrideMs : nextScanDelayMs(effectiveConfig, adaptiveState);
+    const cadenceMs = nextScanDelayMs(effectiveConfig, adaptiveState);
+    const waitMs = remainingScanDelayMs(cadenceMs, performance.now() - cycleStartedMonotonic, nextDelayOverrideMs);
     const reason = nextScanReason(effectiveConfig, adaptiveState, nextDelayReason);
     const waitReason = reason ? ` (${reason})` : "";
     nextDelayOverrideMs = 0;
@@ -1145,6 +976,7 @@ async function main() {
     }
   } while (!shuttingDown);
 
+  await stopProductWork();
   if (context) {
     if (scanner && scanner.close) {
       await scanner.close().catch((error) => logger.warn(`Scanner page cleanup failed: ${error.message}`));
