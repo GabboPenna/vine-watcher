@@ -12,7 +12,9 @@ const FAST_PROFILE_ON = {
   page_timeout_seconds: "18",
   product_ready_timeout_seconds: "2",
   page_settle_seconds: "0",
-  section_delay_seconds: "0"
+  section_delay_seconds: "0",
+  section_scan_concurrency: "2",
+  reuse_section_pages: "true"
 };
 
 const FAST_PROFILE_OFF = {
@@ -25,7 +27,9 @@ const FAST_PROFILE_OFF = {
   page_timeout_seconds: "45",
   product_ready_timeout_seconds: "5",
   page_settle_seconds: "1",
-  section_delay_seconds: "1"
+  section_delay_seconds: "1",
+  section_scan_concurrency: "1",
+  reuse_section_pages: "false"
 };
 
 const CONTROL_PROFILES = {
@@ -90,6 +94,8 @@ const CONTROL_PROFILES = {
     product_ready_timeout_seconds: "2",
     page_settle_seconds: "0",
     section_delay_seconds: "0",
+    section_scan_concurrency: "2",
+    reuse_section_pages: "true",
     browser_memory_recycle_mb: "1500",
     browser_memory_recycle_cooldown_minutes: "10"
   },

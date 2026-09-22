@@ -6,6 +6,20 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.8.0] - 2026-09-22
+
+### Changed
+
+- Moved estimated-value lookups and Telegram caption edits into a background worker so slow detail requests no longer hold up new-product scans or alerts.
+- Prioritized new product notifications over queued caption edits, with a shared notification budget, outbound pacing, and a persisted-state check before sending.
+- Enabled two concurrent section scans and reusable Chromium tabs in `/fast on` and the `drop` profile; `/fast off` restores serial scans and fresh tabs.
+- Changed scan intervals to run from the start of one cycle to the next, subtracting work time without overlapping cycles. Error backoff still waits its full duration after a failed cycle.
+
+### Added
+
+- Persisted pending value edits and retry deadlines across restarts, including values recovered while a Telegram send is still in progress.
+- Added background-worker health metrics and regression coverage for notification latency, deduplication, value-only alerts, inventory consistency, shutdown, and scheduling.
+
 ## [0.7.0] - 2026-07-15
 
 ### Added

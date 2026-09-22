@@ -15,13 +15,14 @@ Vine Watcher monitors the Amazon Vine sections already available to your logged-
 - Scores products with keyword, brand, category, and negative-signal rules.
 - Can load extra scoring keywords from JSON or simple YAML files.
 - Sends compact Telegram notifications with score, estimated Vine value, grouped reasons, ASIN, image when available, and an inline Vine section button.
-- Sends matching notifications immediately, persists the Telegram message handle, and edits it when the durable Vine-value retry queue finds the estimated value.
+- Sends matching notifications immediately; a background worker recovers missing values and edits the original message without delaying the next scan.
 - Can be controlled from Telegram with an optional private command interface.
 - Supports estimated-value alerts from the Vine card or the read-only Vine detail tax value.
 - Stores notification decisions, triggers, blockers, and a safe config snapshot for debugging.
 - Rejects ambiguous empty/error pages before inventory state is changed and retries transient section navigation failures.
 - Includes dry-run scans, persisted failed-cycle diagnostics, background SQLite maintenance, and a local read-only health API.
 - Can scan sections in parallel and reuse Chromium tabs for lower notification latency.
+- Schedules scans from start to start, without adding scan duration to the configured interval or overlapping cycles.
 - Runs on Debian with systemd or with Docker Compose.
 - Uses a persistent Chromium profile created by manual login.
 - Uses headed Chromium inside a virtual display for the systemd service to reduce false Amazon login redirects.
@@ -145,6 +146,8 @@ Useful commands:
 /fast on|off                  fast or conservative profile
 /reset all                    clear runtime overrides
 ```
+
+`/fast on` also enables two concurrent section scans and reusable Chromium tabs. `/fast off` restores serial scanning and closes tabs after use. See [notification timing and scanner settings](docs/CONFIGURATION.md#scanner) for the cadence and retry behavior.
 
 When Telegram Control starts it also registers the bot command menu, so Telegram clients can show native commands from the chat menu. `/menu` sends an inline button panel for the common actions.
 

@@ -157,6 +157,8 @@ class ProductStorage {
     ensureColumn("products", "telegram_chat_id", "TEXT");
     ensureColumn("products", "telegram_message_id", "INTEGER");
     ensureColumn("products", "telegram_message_kind", "TEXT");
+    ensureColumn("products", "value_edit_pending", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn("products", "value_edit_next_at", "TEXT");
     ensureColumn("scan_cycles", "layout_warnings_json", "TEXT NOT NULL DEFAULT '[]'");
     ensureColumn("scan_cycles", "success", "INTEGER NOT NULL DEFAULT 1");
     ensureColumn("scan_cycles", "failure_kind", "TEXT NOT NULL DEFAULT ''");
@@ -453,6 +455,40 @@ class ProductStorage {
       isNew: true,
       product: this.findProductByIdStatement.get(info.lastInsertRowid)
     };
+  }
+
+  productById(productId) {
+    return this.findProductByIdStatement.get(productId);
+  }
+
+  dueValueProducts(sectionNames, limit) {
+    if (!sectionNames.length || limit <= 0) return [];
+    const placeholders = sectionNames.map(() => "?").join(",");
+    return this.db.prepare(`SELECT * FROM products
+      WHERE present_now = 1 AND COALESCE(estimated_value_eur, 0) <= 0
+        AND COALESCE(vine_recommendation_id, '') != ''
+        AND (value_lookup_next_at IS NULL OR value_lookup_next_at <= ?)
+        AND section IN (${placeholders})
+      ORDER BY notified ASC, first_seen_at DESC, id DESC LIMIT ?`)
+      .all(nowIso(), ...sectionNames, Math.floor(limit));
+  }
+
+  updateProductValue(productId, value) {
+    this.db.prepare(`UPDATE products SET estimated_value_eur = ?,
+      value_edit_pending = CASE WHEN notified = 1 AND telegram_message_id IS NOT NULL THEN 1 ELSE 0 END
+      WHERE id = ?`).run(value, productId);
+    return this.productById(productId);
+  }
+
+  pendingValueEdits(limit = 10) {
+    return this.db.prepare(`SELECT * FROM products WHERE value_edit_pending = 1
+      AND (value_edit_next_at IS NULL OR value_edit_next_at <= ?)
+      ORDER BY first_seen_at DESC LIMIT ?`).all(nowIso(), limit);
+  }
+
+  recordValueEdit(productId, success) {
+    this.db.prepare("UPDATE products SET value_edit_pending = ?, value_edit_next_at = ? WHERE id = ?")
+      .run(success ? 0 : 1, success ? null : new Date(Date.now() + 60000).toISOString(), productId);
   }
 
   markNotified(productId, sentMessage = {}) {
