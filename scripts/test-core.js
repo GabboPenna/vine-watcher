@@ -543,7 +543,9 @@ function testStorageEstimatedValue() {
     inventoryAt: "2026-06-20T10:03:00.000Z",
     decision: "candidate"
   });
-  const reappeared = storage.searchProducts("bosch", 1)[0];
+  // Both ASINs have the same title and may share a millisecond timestamp.
+  // Verify the product that actually reappeared, not a tied search result.
+  const reappeared = storage.productById(saved.product.id);
   assert.equal(reappeared.present_now, 1);
   assert.equal(reappeared.reappeared_count, 1);
 
@@ -567,7 +569,7 @@ function testStorageEstimatedValue() {
   );
   assert.equal(storage.markMissingProducts("2026-06-20T10:04:00.000Z", ["Additional items"]), 1);
   assert.equal(storage.searchProducts("additional", 1)[0].present_now, 0);
-  assert.equal(storage.searchProducts("bosch", 1)[0].present_now, 1);
+  assert.equal(storage.productById(saved.product.id).present_now, 1);
 
   storage.setSetting("min_score_to_notify", "5");
   assert.equal(storage.getSetting("min_score_to_notify"), "5");
