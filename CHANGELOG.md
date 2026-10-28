@@ -6,6 +6,18 @@ This project uses semantic versioning.
 
 ## Unreleased
 
+## [0.8.1] - 2026-10-28
+
+### Changed
+
+- Indexed case-insensitive ASIN and variant-ASIN fallback lookups and reused prepared lookup statements, preserving identity precedence, legacy matching, and fresh persisted-state reads.
+- Existing databases receive the new indexes automatically at startup; no configuration changes are required.
+
+### Added
+
+- Added storage regression tests for fallback query plans, legacy identities, migration/reopen, and notification/inventory changes between lookups.
+- Added a synthetic storage benchmark for comparing lookup and persistence performance against an earlier storage implementation.
+
 ## [0.8.0] - 2026-09-22
 
 ### Changed

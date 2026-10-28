@@ -173,6 +173,8 @@ class ProductStorage {
       CREATE INDEX IF NOT EXISTS idx_products_disappeared_at ON products(disappeared_at);
       CREATE INDEX IF NOT EXISTS idx_products_recommendation_id ON products(vine_recommendation_id);
       CREATE INDEX IF NOT EXISTS idx_products_value_lookup_next ON products(value_lookup_next_at);
+      CREATE INDEX IF NOT EXISTS idx_products_asin_folded ON products(upper(COALESCE(asin, '')));
+      CREATE INDEX IF NOT EXISTS idx_products_card_asin_folded ON products(upper(COALESCE(vine_card_asin, '')));
     `);
 
     this.db.exec(`
@@ -305,6 +307,25 @@ class ProductStorage {
 
     this.findProductByIdStatement = this.db.prepare("SELECT * FROM products WHERE id = ?");
 
+    // Cache SQL statements, never product rows: every lookup still reads the
+    // current database state, including notification and inventory changes.
+    this.findProductByIdentityStatement = this.db.prepare(
+      "SELECT * FROM products WHERE identity_key = ? ORDER BY id ASC LIMIT 1"
+    );
+    this.findProductByAsinStatement = this.db.prepare(`SELECT * FROM products
+      WHERE upper(COALESCE(asin, '')) = @asin
+         OR upper(COALESCE(vine_card_asin, '')) = @asin
+      ORDER BY id ASC LIMIT 1`);
+    this.findProductByRecommendationStatement = this.db.prepare(
+      "SELECT * FROM products WHERE vine_recommendation_id = ? ORDER BY id ASC LIMIT 1"
+    );
+    this.findProductByUrlStatement = this.db.prepare(
+      "SELECT * FROM products WHERE url = ? ORDER BY id ASC LIMIT 1"
+    );
+    this.findProductByTitleStatement = this.db.prepare(
+      "SELECT * FROM products WHERE normalized_title = ? ORDER BY id ASC LIMIT 1"
+    );
+
     this.getSettingsStatement = this.db.prepare("SELECT key, value FROM settings ORDER BY key");
 
     this.getSettingStatement = this.db.prepare("SELECT value FROM settings WHERE key = ?");
@@ -367,39 +388,28 @@ class ProductStorage {
     const key = identityKey({ ...product, normalized_title: normalizedTitle });
 
     if (key && !key.startsWith("title:")) {
-      const byIdentity = this.db
-        .prepare("SELECT * FROM products WHERE identity_key = ? ORDER BY id ASC LIMIT 1")
-        .get(key);
+      const byIdentity = this.findProductByIdentityStatement.get(key);
       if (byIdentity) {
         return byIdentity;
       }
     }
 
     if (asin) {
-      const byAsin = this.db
-        .prepare(
-          `SELECT * FROM products
-           WHERE upper(COALESCE(asin, '')) = @asin
-              OR upper(COALESCE(vine_card_asin, '')) = @asin
-           ORDER BY id ASC LIMIT 1`
-        )
-        .get({ asin });
+      const byAsin = this.findProductByAsinStatement.get({ asin });
       if (byAsin) {
         return byAsin;
       }
     }
 
     if (recommendationId) {
-      const byRecommendation = this.db
-        .prepare("SELECT * FROM products WHERE vine_recommendation_id = ? ORDER BY id ASC LIMIT 1")
-        .get(recommendationId);
+      const byRecommendation = this.findProductByRecommendationStatement.get(recommendationId);
       if (byRecommendation) {
         return byRecommendation;
       }
     }
 
     if (url) {
-      const byUrl = this.db.prepare("SELECT * FROM products WHERE url = ? ORDER BY id ASC LIMIT 1").get(url);
+      const byUrl = this.findProductByUrlStatement.get(url);
       if (byUrl) {
         return byUrl;
       }
@@ -409,9 +419,7 @@ class ProductStorage {
       return null;
     }
 
-    return this.db
-      .prepare("SELECT * FROM products WHERE normalized_title = ? ORDER BY id ASC LIMIT 1")
-      .get(normalizedTitle);
+    return this.findProductByTitleStatement.get(normalizedTitle);
   }
 
   saveProduct(product, scoring, diagnostics = {}) {
