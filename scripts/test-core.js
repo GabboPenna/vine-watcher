@@ -603,8 +603,16 @@ function testStorageEstimatedValue() {
   const failedCycle = storage.recentScanCycles(1)[0];
   assert.equal(failedCycle.success, 0);
   assert.equal(failedCycle.failure_kind, "transient_scan_failure");
-  assert.equal(storage.searchProducts("bosch", 1)[0].asin, product.asin);
-  assert.ok(storage.recentProducts({ mode: "all", limit: 2 }).some((row) => row.asin === product.asin));
+  // Equal timestamps and scores do not define an order between matching ASINs.
+  storage.db.prepare("UPDATE products SET last_seen_at = ? WHERE id IN (?, ?)")
+    .run("2026-06-20T10:03:00.000Z", saved.product.id, sameTitleDifferentAsin.product.id);
+  assert.deepEqual(
+    storage.searchProducts("bosch", 2).map((row) => row.asin).sort(),
+    [product.asin, sameTitleDifferentAsin.product.asin].sort()
+  );
+  const recent = storage.recentProducts({ mode: "all", limit: 3 });
+  assert.equal(recent.length, 3);
+  assert.ok(recent.some((row) => row.asin === product.asin));
   const cleanup = storage.cleanup({ productDays: 1, scanCycleDays: 1, vacuum: false });
   assert.equal(cleanup.vacuumed, false);
 

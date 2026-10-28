@@ -18,6 +18,10 @@ This project uses semantic versioning.
 - Added storage regression tests for fallback query plans, legacy identities, migration/reopen, and notification/inventory changes between lookups.
 - Added a synthetic storage benchmark for comparing lookup and persistence performance against an earlier storage implementation.
 
+### Fixed
+
+- Made the same-title search regression test deterministic when products share a timestamp and score.
+
 ## [0.8.0] - 2026-09-22
 
 ### Changed
