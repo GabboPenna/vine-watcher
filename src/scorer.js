@@ -33,9 +33,13 @@ function containsAny(haystack, keywords) {
 function scoreProduct(product, keywordConfig) {
   const reasons = [];
   const text = normalizeTextForMatch([product.title, product.raw_text, product.section].filter(Boolean).join(" "));
+  const title = normalizeTextForMatch(product.title || "");
   let score = 0;
   let positiveSignals = 0;
   let negativeSignals = 0;
+
+  const isDrone = containsAny(title, keywordConfig.droneKeywords || []);
+  const isDroneAccessory = isDrone && containsAny(title, keywordConfig.droneAccessoryKeywords || []);
 
   const highMatches = addKeywordMatches({
     haystack: text,
@@ -93,6 +97,16 @@ function scoreProduct(product, keywordConfig) {
     score += 5;
     positiveSignals += 1;
     reasons.push("bonus: home appliance or household");
+  }
+
+  if (isDroneAccessory) {
+    score -= 50;
+    negativeSignals += 2;
+    reasons.push("malus: drone accessory");
+  } else if (isDrone) {
+    score += 20;
+    positiveSignals += 2;
+    reasons.push("category: drone");
   }
 
   if (containsAny(text, keywordConfig.genericAccessoryKeywords)) {

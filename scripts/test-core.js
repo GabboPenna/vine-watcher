@@ -186,6 +186,56 @@ function testScoringAndTriggers() {
   assert.ok(genericDinEnclosureScored.score < 20);
 }
 
+function testDroneScoring() {
+  const config = loadConfig({
+    notifyAllProducts: false,
+    minScoreToNotify: 20,
+    minValueToNotifyEur: 0,
+    strictNotifyMode: true,
+    strictMinPositiveSignals: 2,
+    strictMaxNegativeSignals: 0
+  });
+
+  const drones = [
+    "Drone con Telecamera 4K per Adulti, GPS, Motore Brushless e 2 Batterie",
+    "Mini Drone per Bambini con Telecomando, Quadcopter RC",
+    "FPV quadcopter racing brushless",
+    "Quadricottero agricolo professionale con GPS"
+  ];
+
+  for (const title of drones) {
+    const scored = scoreProduct({ title, raw_text: "", section: "Additional items" }, config.keywords);
+    assert.ok(scored.score >= 20, `Expected drone to score at least 20: ${title}`);
+    assert.ok(scored.positiveSignals >= 2, `Expected drone to have at least two positive signals: ${title}`);
+    assert.ok(scored.reasons.includes("category: drone"), `Expected drone category reason: ${title}`);
+    assert.ok(
+      notificationTriggers({ estimated_value_eur: null }, scored, config).length > 0,
+      `Expected drone notification trigger: ${title}`
+    );
+  }
+
+  const accessories = [
+    "Batteria per drone DJI Mini 4 Pro ad alta capacita",
+    "Eliche compatibili con drone pieghevole",
+    "Custodia rigida per drone con tracolla",
+    "Drone landing pad pieghevole impermeabile",
+    "Supporto tablet per telecomando drone",
+    "Set filtri ND per fotocamera drone"
+  ];
+
+  for (const title of accessories) {
+    const scored = scoreProduct({ title, raw_text: "", section: "Additional items" }, config.keywords);
+    assert.ok(scored.score < 20, `Expected drone accessory to stay below threshold: ${title}`);
+    assert.ok(scored.negativeSignals >= 2, `Expected drone accessory negative signals: ${title}`);
+    assert.ok(scored.reasons.includes("malus: drone accessory"), `Expected drone accessory reason: ${title}`);
+    assert.equal(
+      notificationTriggers({ estimated_value_eur: null }, scored, config).length,
+      0,
+      `Expected no notification for drone accessory: ${title}`
+    );
+  }
+}
+
 function testNotifyAllProductWindow() {
   assert.equal(isTimeWindowActive("09:00-22:30", "Europe/Rome", Date.parse("2026-06-19T06:59:00Z")), false);
   assert.equal(isTimeWindowActive("09:00-22:30", "Europe/Rome", Date.parse("2026-06-19T07:00:00Z")), true);
@@ -1627,6 +1677,7 @@ async function main() {
   testEuroParsing();
   testUrlCanonicalization();
   testScoringAndTriggers();
+  testDroneScoring();
   testNotifyAllProductWindow();
   testRuntimeSettings();
   testConfigValidation();
