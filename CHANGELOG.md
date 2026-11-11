@@ -6,10 +6,6 @@ This project uses semantic versioning.
 
 ## Unreleased
 
-### Added
-
-- Added dedicated scoring for drones and quadcopters, with strong accessory filtering for batteries, propellers, cases, mounts, chargers, landing pads, and camera filters.
-
 ## [0.8.1] - 2026-10-28
 
 ### Changed
